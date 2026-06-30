@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Dog Log 🐕</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .pulse { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useRef } = React;
+
+    const MEDICATIONS = {
+      nexgard: { name: 'Nexgard', interval: 30, color: 'blue', icon: '💊' },
+      drontal: { name: 'Drontal', interval: 90, color: 'green', icon: '💉' }
+    };
+
+    const App = () => {
+      const [dogs, setDogs] = useState([]);
+      const [bills, setBills] = useState([]);
+      const [companyInfo, setCompanyInfo] = useState({ name: '', address: '', email: '' });
+      const [activeTab, setActiveTab] = useState('medications');
+      const [userName, setUserName] = useState(() => localStorage.getItem('dogTracker_userName') || '');
+      const [showNamePrompt, setShowNamePrompt] = useState(false);
+      const [activityLog, setActivityLog] = useState([]);
+      const [fileHandle, setFileHandle] = useState(null);
+      const [fileName, setFileName] = useState(null);
+      const [lastSaved, setLastSaved] = useState(null);
+      const [isSaving, setIsSaving] = useState(false);
+      const [showScanner, setShowScanner] = useState(false);
+      const [isScanning, setIsScanning] = useState(false);
+      const [scanPreview, setScanPreview] = useState(null);
+      const [scannedItems, setScannedItems] = useState([]);
+      const saveTimeoutRef = useRef(null);
+
+      const today = new Date();
+
+      // Load from localStorage on startup
+      useEffect(() => {
+        const saved = localStorage.getItem('dogLog_data');
+        if (saved) {
+          try {
+            const data = JSON.parse(saved);
+            if (data.dogs) setDogs(data.dogs);
+            if (data.bills) setBills(data.bills);
+            if (data.companyInfo) setCompanyInfo(data.companyInfo);
+            if (data.activityLog) setActivityLog(data.activityLog);
+          } catch (e) { console.log('Load error', e); }
+        }
+      }, []);
+
+      // Auto-save to localStorage
+      useEffect(() => {
+        localStorage.setItem('dogLog_data', JSON.stringify({ dogs, bills, companyInfo, activityLog }));
+      }, [dogs, bills, companyInfo, activityLog]);
+
+      useEffect(() => {
+        if (userName) localStorage.setItem('dogTracker_userName', userName);
+      }, [userName]);
+
+      // Auto-save to Excel file when data changes
+      useEffect(() => {
+        if (fileHandle && (dogs.length > 0 || bills.length > 0)) {
+          if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+          saveTimeoutRef.current = setTimeout(() => saveToExcel(), 1000);
+        }
+      }, [dogs, bills, companyInfo, activityLog, fileHandle]);
+
+      const logActivity = (action, details) => {
+        if (!userName) return null;
+        const activity = { user: userName, action, details, time: new Date().toISOString() };
+        setActivityLog(prev => [...prev.slice(-19), activity]);
+        return activity;
+      };
+
+      // ==================== EXCEL FILE FUNCTIONS ====================
+
+      const createExcelWorkbook = () => {
+        const wb = XLSX.utils.book_new();
+
+        // Dogs sheet
+        const dogsData = dogs.map(d => ({
+          ID: d.id,
+          Name: d.name,
+          Nexgard_Last: d.nexgard?.lastGiven || '',
+          Drontal_Last: d.drontal?.lastGiven || ''
+        }));
+        const dogsSheet = XLSX.utils.json_to_sheet(dogsData.length ? dogsData : [{ ID: '', Name: '', Nexgard_Last: '', Drontal_Last: '' }]);
+        XLSX.utils.book_append_sheet(wb, dogsSheet, 'Dogs');
+
+        // Bills sheet
+        const billsData = bills.map(b => ({
+          ID: b.id,
+          Description: b.description,
+          Amount: parseFloat(b.amount) || 0,
+          DueDate: b.dueDate,
+          Paid: b.paid ? 'Yes' : 'No'
+        }));
+        const billsSheet = XLSX.utils.json_to_sheet(billsData.length ? billsData : [{ ID: '', Description: '', Amount: 0, DueDate: '', Paid: '' }]);
+        XLSX.utils.book_append_sheet(wb, billsSheet, 'Bills');
+
+        // Company sheet
+        const companySheet = XLSX.utils.json_to_sheet([{
+          Name: companyInfo.name,
+          Address: companyInfo.address,
+          Email: companyInfo.email
+        }]);
+        XLSX.utils.book_append_sheet(wb, companySheet, 'Company');
+
+        // Activity sheet
+        const activitySheet = XLSX.utils.json_to_sheet(activityLog.length ? activityLog : [{ user: '', action: '', details: '', time: '' }]);
+        XLSX.utils.book_append_sheet(wb, activitySheet, 'Activity');
+
+        return wb;
+      };
+
+      const saveToExcel = async () => {
+        if (!fileHandle) return;
+        setIsSaving(true);
+        try {
+          const wb = createExcelWorkbook();
+          const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+          const writable = await fileHandle.createWritable();
+          await writable.write(wbout);
+          await writable.close();
+          setLastSaved(new Date());
+        } catch (err) {
+          console.error('Save error:', err);
+          if (err.name === 'NotAllowedError') {
+            setFileHandle(null);
+            setFileName(null);
+            alert('File access lost. Please reconnect the Excel file.');
+          }
+        }
+        setIsSaving(false);
+      };
+
+      const loadFromExcel = (file) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type: 'array' });
+
+            // Read Dogs
+            if (wb.SheetNames.includes('Dogs')) {
+              const dogsData = XLSX.utils.sheet_to_json(wb.Sheets['Dogs']);
+              const loadedDogs = dogsData.filter(d => d.Name).map(d => ({
+                id: d.ID || Date.now() + Math.random(),
+                name: d.Name,
+                nexgard: d.Nexgard_Last ? { lastGiven: d.Nexgard_Last } : null,
+                drontal: d.Drontal_Last ? { lastGiven: d.Drontal_Last } : null
+              }));
+              if (loadedDogs.length) setDogs(loadedDogs);
+            }
+
+            // Read Bills
+            if (wb.SheetNames.includes('Bills')) {
+              const billsData = XLSX.utils.sheet_to_json(wb.Sheets['Bills']);
+              const loadedBills = billsData.filter(b => b.Description).map(b => ({
+                id: b.ID || Date.now() + Math.random(),
+                description: b.Description,
+                amount: b.Amount?.toString() || '0',
+                dueDate: b.DueDate || '',
+                paid: b.Paid === 'Yes'
+              }));
+              if (loadedBills.length) setBills(loadedBills);
+            }
+
+            // Read Company
+            if (wb.SheetNames.includes('Company')) {
+              const companyData = XLSX.utils.sheet_to_json(wb.Sheets['Company']);
+              if (companyData[0]) {
+                setCompanyInfo({
+                  name: companyData[0].Name || '',
+                  address: companyData[0].Address || '',
+                  email: companyData[0].Email || ''
+                });
+              }
+            }
+
+            // Read Activity
+            if (wb.SheetNames.includes('Activity')) {
+              const activityData = XLSX.utils.sheet_to_json(wb.Sheets['Activity']);
+              if (activityData.length && activityData[0].user) {
+                setActivityLog(activityData);
+              }
+            }
+
+            setLastSaved(new Date());
+          } catch (err) {
+            console.error('Load error:', err);
+            alert('Error reading Excel file.');
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      };
+
+      const connectExcelFile = async () => {
+        try {
+          // Check if File System Access API is supported
+          if (!('showSaveFilePicker' in window)) {
+            alert('Your browser does not support direct file saving. Please use Chrome or Edge.');
+            return;
+          }
+
+          const handle = await window.showSaveFilePicker({
+            suggestedName: 'dog-log-data.xlsx',
+            types: [{ description: 'Excel Files', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]
+          });
+
+          setFileHandle(handle);
+          setFileName(handle.name);
+
+          // Check if file exists and has data
+          try {
+            const file = await handle.getFile();
+            if (file.size > 0) {
+              loadFromExcel(file);
+            } else {
+              // New file, save current data
+              await saveToExcel();
+            }
+          } catch (e) {
+            // New file
+            await saveToExcel();
+          }
+
+          logActivity('connected Excel file', handle.name);
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            console.error('File picker error:', err);
+          }
+        }
+      };
+
+      const openExistingFile = async () => {
+        try {
+          if (!('showOpenFilePicker' in window)) {
+            alert('Your browser does not support direct file access. Please use Chrome or Edge.');
+            return;
+          }
+
+          const [handle] = await window.showOpenFilePicker({
+            types: [{ description: 'Excel Files', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]
+          });
+
+          setFileHandle(handle);
+          setFileName(handle.name);
+
+          const file = await handle.getFile();
+          loadFromExcel(file);
+
+          logActivity('opened Excel file', handle.name);
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            console.error('File picker error:', err);
+          }
+        }
+      };
+
+      // ==================== DOG FUNCTIONS ====================
+
+      const addDog = () => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const name = prompt('Enter dog name:');
+        if (name?.trim()) {
+          const newDog = { id: Date.now(), name: name.trim(), nexgard: null, drontal: null };
+          setDogs([...dogs, newDog]);
+          logActivity('added dog', name.trim());
+        }
+      };
+
+      const removeDog = (id) => {
+        const dog = dogs.find(d => d.id === id);
+        if (dog && confirm(`Remove ${dog.name}?`)) {
+          setDogs(dogs.filter(d => d.id !== id));
+          logActivity('removed dog', dog.name);
+        }
+      };
+
+      const updateDogName = (id, newName) => {
+        if (newName?.trim()) {
+          setDogs(dogs.map(d => d.id === id ? { ...d, name: newName.trim() } : d));
+        }
+      };
+
+      const updateMedicationDate = (dogId, medType, date) => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        setDogs(dogs.map(d => d.id === dogId ? { ...d, [medType]: { lastGiven: date, givenBy: userName } } : d));
+        const dog = dogs.find(d => d.id === dogId);
+        logActivity(`updated ${MEDICATIONS[medType].name} date`, `for ${dog?.name}`);
+      };
+
+      const giveMedication = (dogId, medType) => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const todayStr = today.toISOString().split('T')[0];
+        setDogs(dogs.map(d => d.id === dogId ? { ...d, [medType]: { lastGiven: todayStr, givenBy: userName } } : d));
+        const dog = dogs.find(d => d.id === dogId);
+        logActivity(`gave ${MEDICATIONS[medType].name}`, `to ${dog?.name}`);
+      };
+
+      const getDaysUntilDue = (lastGiven, interval) => {
+        if (!lastGiven) return -999;
+        const last = new Date(lastGiven);
+        const due = new Date(last.getTime() + interval * 24 * 60 * 60 * 1000);
+        return Math.ceil((due - today) / (24 * 60 * 60 * 1000));
+      };
+
+      const getStatusColor = (days) => {
+        if (days === -999) return 'gray';
+        if (days < 0) return 'red';
+        if (days <= 7) return 'yellow';
+        return 'green';
+      };
+
+      // ==================== BILL FUNCTIONS ====================
+
+      const addBill = () => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const todayStr = today.toISOString().split('T')[0];
+        const newBill = { id: Date.now(), description: '', amount: '', dueDate: todayStr, paid: false };
+        setBills([...bills, newBill]);
+      };
+
+      const updateBill = (id, field, value) => {
+        setBills(bills.map(b => b.id === id ? { ...b, [field]: value } : b));
+      };
+
+      const toggleBillPaid = (id) => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const bill = bills.find(b => b.id === id);
+        setBills(bills.map(b => b.id === id ? { ...b, paid: !b.paid } : b));
+        logActivity(bill?.paid ? 'unmarked bill' : 'paid bill', bill?.description);
+      };
+
+      const removeBill = (id) => {
+        const bill = bills.find(b => b.id === id);
+        if (bill && confirm(`Remove "${bill.description || 'this bill'}"?`)) {
+          setBills(bills.filter(b => b.id !== id));
+          logActivity('removed bill', bill.description);
+        }
+      };
+
+      // ==================== SCANNER ====================
+
+      const handleImageUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          setScanPreview(event.target.result);
+          setIsScanning(true);
+          setScannedItems([]);
+          try {
+            const result = await Tesseract.recognize(event.target.result, 'tha+eng', { logger: m => console.log(m) });
+            const lines = result.data.text.split('\n').filter(line => line.trim());
+            const items = [];
+            for (const line of lines) {
+              const numbers = line.match(/[\d,]+\.?\d*/g);
+              if (numbers) {
+                for (const num of numbers) {
+                  const amount = parseFloat(num.replace(/,/g, ''));
+                  if (amount >= 10 && amount < 100000) {
+                    const desc = line.replace(num, '').replace(/[฿$]/g, '').trim().substring(0, 50);
+                    items.push({ id: Date.now() + Math.random(), description: desc || 'Item', amount, selected: true });
+                  }
+                }
+              }
+            }
+            setScannedItems(items);
+          } catch (err) { console.error('OCR error:', err); alert('Error scanning.'); }
+          setIsScanning(false);
+        };
+        reader.readAsDataURL(file);
+      };
+
+      const toggleScannedItem = (id) => setScannedItems(scannedItems.map(item => item.id === id ? { ...item, selected: !item.selected } : item));
+      const updateScannedItem = (id, field, value) => setScannedItems(scannedItems.map(item => item.id === id ? { ...item, [field]: value } : item));
+      const removeScannedItem = (id) => setScannedItems(scannedItems.filter(item => item.id !== id));
+      const selectAllItems = () => setScannedItems(scannedItems.map(item => ({ ...item, selected: true })));
+      const unselectAllItems = () => setScannedItems(scannedItems.map(item => ({ ...item, selected: false })));
+
+      const addScannedItems = () => {
+        const selectedItems = scannedItems.filter(item => item.selected);
+        if (selectedItems.length === 0) return;
+        if (!userName) { setShowNamePrompt(true); return; }
+        const todayStr = today.toISOString().split('T')[0];
+        const newBills = selectedItems.map(item => ({
+          id: Date.now() + Math.random(),
+          description: item.description,
+          amount: item.amount.toString(),
+          dueDate: todayStr,
+          paid: false
+        }));
+        logActivity('added bills from scan', `${newBills.length} items`);
+        setBills([...bills, ...newBills]);
+        setScanPreview(null);
+        setScannedItems([]);
+        setShowScanner(false);
+      };
+
+      const generateInvoice = () => {
+        const unpaidBills = bills.filter(b => !b.paid);
+        if (unpaidBills.length === 0) { alert('No unpaid bills!'); return; }
+        const total = unpaidBills.reduce((sum, b) => sum + (parseFloat(b.amount) || 0), 0);
+        let html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Invoice</title>
+          <style>body{font-family:Arial;max-width:800px;margin:0 auto;padding:40px}
+          .header{text-align:center;border-bottom:2px solid #333;padding-bottom:20px;margin-bottom:30px}
+          table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:12px;text-align:left}
+          th{background:#f5f5f5}.total{font-size:1.2em;font-weight:bold;text-align:right;margin-top:20px}</style></head>
+          <body><div class="header"><h1>🐕 The Dog Log - Invoice</h1><p>Date: ${today.toLocaleDateString('th-TH')}</p></div>`;
+        if (companyInfo.name) html += `<div style="margin-bottom:30px"><strong>Bill To:</strong><br>${companyInfo.name}<br>${companyInfo.address || ''}<br>${companyInfo.email || ''}</div>`;
+        html += `<table><thead><tr><th>Description</th><th>Due Date</th><th style="text-align:right">Amount (฿)</th></tr></thead><tbody>`;
+        unpaidBills.forEach(b => { html += `<tr><td>${b.description}</td><td>${b.dueDate}</td><td style="text-align:right">${parseFloat(b.amount).toLocaleString()}</td></tr>`; });
+        html += `</tbody></table><div class="total">Total: ฿${total.toLocaleString()}</div></body></html>`;
+        const blob = new Blob([html], { type: 'text/html' });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+        a.download = `invoice-${today.toISOString().split('T')[0]}.html`; a.click();
+        logActivity('generated invoice', `฿${total.toLocaleString()}`);
+      };
+
+      // Alerts
+      const getAlerts = () => {
+        const alerts = [];
+        dogs.forEach(dog => {
+          Object.entries(MEDICATIONS).forEach(([key, med]) => {
+            const days = getDaysUntilDue(dog[key]?.lastGiven, med.interval);
+            if (days <= 7 && days !== -999) alerts.push({ type: 'medication', dog: dog.name, med: med.name, days, icon: med.icon });
+            else if (days === -999) alerts.push({ type: 'medication', dog: dog.name, med: med.name, days: null, icon: med.icon, never: true });
+          });
+        });
+        bills.filter(b => !b.paid).forEach(bill => {
+          const dueDate = new Date(bill.dueDate);
+          const days = Math.ceil((dueDate - today) / (24 * 60 * 60 * 1000));
+          if (days <= 7) alerts.push({ type: 'bill', description: bill.description, amount: bill.amount, days });
+        });
+        return alerts.sort((a, b) => (a.days ?? 999) - (b.days ?? 999));
+      };
+
+      // Modals
+      const NamePrompt = () => (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
+            <h3 className="text-lg font-bold mb-4">👋 What's your name?</h3>
+            <input type="text" placeholder="Enter your name" className="w-full p-3 border rounded-lg mb-4"
+              onKeyDown={(e) => { if (e.key === 'Enter' && e.target.value.trim()) { setUserName(e.target.value.trim()); setShowNamePrompt(false); }}} autoFocus />
+            <div className="flex gap-2">
+              <button onClick={() => setShowNamePrompt(false)} className="flex-1 py-2 bg-gray-100 rounded-lg">Cancel</button>
+              <button onClick={(e) => { const input = e.target.parentElement.previousElementSibling; if (input.value.trim()) { setUserName(input.value.trim()); setShowNamePrompt(false); }}}
+                className="flex-1 py-2 bg-blue-600 text-white rounded-lg">Save</button>
+            </div>
+          </div>
+        </div>
+      );
+
+      const ScannerModal = () => (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold">📷 Scan Invoice</h3>
+              <button onClick={() => { setShowScanner(false); setScannedItems([]); setScanPreview(null); }} className="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            {!scanPreview && (
+              <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center">
+                <div className="text-4xl mb-4">📄</div>
+                <label className="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700">
+                  Choose Image <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                </label>
+              </div>
+            )}
+            {isScanning && <div className="text-center py-8"><div className="text-4xl mb-4 pulse">🔍</div><p>Scanning...</p></div>}
+            {scanPreview && !isScanning && (
+              <div className="space-y-4">
+                <div className="flex gap-4">
+                  <div className="w-1/3">
+                    <img src={scanPreview} alt="Scanned" className="w-full rounded-lg border" />
+                    <label className="block mt-2 text-center text-sm text-blue-600 hover:underline cursor-pointer">
+                      Different image <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                    </label>
+                  </div>
+                  <div className="w-2/3">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-semibold">Found {scannedItems.length} items:</h4>
+                      {scannedItems.length > 0 && (
+                        <div className="flex gap-2">
+                          <button onClick={selectAllItems} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Select All</button>
+                          <button onClick={unselectAllItems} className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Unselect All</button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {scannedItems.map(item => (
+                        <div key={item.id} className={`flex items-center gap-2 p-3 rounded-lg border ${item.selected ? 'bg-green-50 border-green-200' : 'bg-gray-50'}`}>
+                          <button onClick={() => toggleScannedItem(item.id)} className={`w-6 h-6 rounded border-2 flex items-center justify-center ${item.selected ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>
+                            {item.selected && '✓'}
+                          </button>
+                          <input type="text" defaultValue={item.description} onBlur={(e) => updateScannedItem(item.id, 'description', e.target.value)} className="flex-1 px-2 py-1 border rounded text-sm" />
+                          <span className="text-gray-500">฿</span>
+                          <input type="number" defaultValue={item.amount} onBlur={(e) => updateScannedItem(item.id, 'amount', parseFloat(e.target.value) || 0)} className="w-20 px-2 py-1 border rounded text-sm text-right" />
+                          <button onClick={() => removeScannedItem(item.id)} className="text-red-400 hover:text-red-600">🗑️</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                {scannedItems.length > 0 && (
+                  <div className="flex items-center justify-between pt-4 border-t">
+                    <div className="text-sm text-gray-600">
+                      {scannedItems.filter(i => i.selected).length} selected · Total: ฿{scannedItems.filter(i => i.selected).reduce((sum, i) => sum + i.amount, 0).toLocaleString()}
+                    </div>
+                    <button onClick={addScannedItems} disabled={scannedItems.filter(i => i.selected).length === 0} className="px-4 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50">
+                      Add {scannedItems.filter(i => i.selected).length} Bills
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+
+      const alerts = getAlerts();
+      const totalBills = bills.length;
+      const unpaidTotal = bills.filter(b => !b.paid).reduce((sum, b) => sum + (parseFloat(b.amount) || 0), 0);
+      const paidTotal = bills.filter(b => b.paid).reduce((sum, b) => sum + (parseFloat(b.amount) || 0), 0);
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-4">
+          <div className="max-w-4xl mx-auto space-y-4">
+
+            {/* Header */}
+            <div className="bg-white rounded-2xl shadow-sm p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">🐕</span>
+                <div>
+                  <h1 className="text-xl font-bold text-gray-800">The Dog Log</h1>
+                  <p className="text-sm text-gray-500">Office Medication & Bill Tracker</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {isSaving && <span className="text-xs text-blue-600">💾 Saving...</span>}
+                {lastSaved && !isSaving && <span className="text-xs text-green-600">✓ Saved {lastSaved.toLocaleTimeString('th-TH')}</span>}
+                <button onClick={() => setUserName(prompt('Change name:', userName) || userName)}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-full text-sm hover:bg-gray-200">
+                  👤 {userName || 'Set Name'}
+                </button>
+              </div>
+            </div>
+
+            {/* Excel File Connection */}
+            <div className="bg-white rounded-2xl shadow-sm p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">📊</span>
+                  <div>
+                    <span className="font-medium">Excel Auto-Save</span>
+                    {fileName && <span className="text-sm text-green-600 ml-2">● {fileName}</span>}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={openExistingFile} className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm font-medium">
+                    📂 Open File
+                  </button>
+                  <button onClick={connectExcelFile} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
+                    {fileName ? '📁 Change File' : '➕ New File'}
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                {fileName
+                  ? '💡 Changes auto-save to your Excel file. Put it in Dropbox/OneDrive for team sync!'
+                  : '💡 Connect an Excel file to auto-save. Put it in a shared folder for team sync!'}
+              </p>
+            </div>
+
+            {/* Alerts */}
+            {alerts.length > 0 && (
+              <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-2xl p-4">
+                <h3 className="font-semibold text-orange-700 mb-3">🔔 Upcoming & Overdue</h3>
+                <div className="space-y-2">
+                  {alerts.slice(0, 5).map((alert, i) => (
+                    <div key={i} className="flex items-center justify-between bg-white/80 rounded-lg px-3 py-2">
+                      <span>{alert.type === 'medication' ? <>{alert.icon} <strong>{alert.dog}</strong> - {alert.med}</> : <>📄 {alert.description} (฿{parseFloat(alert.amount).toLocaleString()})</>}</span>
+                      <span className={`text-xs px-2 py-1 rounded-full ${alert.never ? 'bg-gray-100 text-gray-600' : alert.days < 0 ? 'bg-red-100 text-red-700' : alert.days === 0 ? 'bg-orange-100 text-orange-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {alert.never ? 'Never given' : alert.days < 0 ? `${Math.abs(alert.days)}d overdue` : alert.days === 0 ? 'Due today!' : `${alert.days}d left`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tabs */}
+            <div className="flex gap-2 bg-white rounded-2xl p-2 shadow-sm">
+              {[{ id: 'medications', label: '💊 Medications' }, { id: 'bills', label: '📄 Bills' }, { id: 'activity', label: '📋 Activity' }].map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  className={`flex-1 py-2 px-4 rounded-xl text-sm font-medium transition-all ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Content */}
+            <div className="bg-white rounded-2xl shadow-sm p-4">
+              {activeTab === 'medications' && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h2 className="font-semibold text-lg">🐕 Dogs</h2>
+                    <button onClick={addDog} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">+ Add Dog</button>
+                  </div>
+                  {dogs.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500"><div className="text-4xl mb-2">🐕</div><p>No dogs yet. Add your first dog!</p></div>
+                  ) : (
+                    <div className="space-y-3">
+                      {dogs.map(dog => (
+                        <div key={dog.id} className="border rounded-xl p-4">
+                          <div className="flex justify-between items-center mb-3">
+                            <input type="text" defaultValue={dog.name} onBlur={(e) => updateDogName(dog.id, e.target.value)} className="font-bold text-lg bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none" />
+                            <button onClick={() => removeDog(dog.id)} className="text-red-400 hover:text-red-600 text-sm">Remove</button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            {Object.entries(MEDICATIONS).map(([key, med]) => {
+                              const days = getDaysUntilDue(dog[key]?.lastGiven, med.interval);
+                              const status = getStatusColor(days);
+                              return (
+                                <div key={key} className={`p-3 rounded-lg border-2 ${status === 'red' ? 'border-red-200 bg-red-50' : status === 'yellow' ? 'border-yellow-200 bg-yellow-50' : status === 'green' ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+                                  <div className="flex justify-between items-start mb-2">
+                                    <span className="font-medium">{med.icon} {med.name}</span>
+                                    <span className={`text-xs px-2 py-0.5 rounded-full ${status === 'red' ? 'bg-red-200 text-red-800' : status === 'yellow' ? 'bg-yellow-200 text-yellow-800' : status === 'green' ? 'bg-green-200 text-green-800' : 'bg-gray-200 text-gray-600'}`}>
+                                      {days === -999 ? 'Never' : days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Today!' : `${days}d left`}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xs text-gray-500">Last:</span>
+                                    <input type="date" value={dog[key]?.lastGiven || ''} onChange={(e) => updateMedicationDate(dog.id, key, e.target.value)} className="text-xs bg-transparent border rounded px-1 py-0.5" />
+                                  </div>
+                                  <button onClick={() => giveMedication(dog.id, key)} className={`w-full py-1.5 rounded-lg text-sm font-medium ${status === 'green' ? 'bg-gray-200 text-gray-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>Give Today</button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'bills' && (
+                <div className="space-y-4">
+                  <div className="bg-gray-50 rounded-xl p-4">
+                    <h3 className="font-semibold mb-3">🏢 Company Information</h3>
+                    <div className="grid grid-cols-3 gap-3">
+                      <input type="text" placeholder="Company Name" value={companyInfo.name} onChange={(e) => setCompanyInfo({...companyInfo, name: e.target.value})} className="p-2 border rounded-lg text-sm" />
+                      <input type="text" placeholder="Address" value={companyInfo.address} onChange={(e) => setCompanyInfo({...companyInfo, address: e.target.value})} className="p-2 border rounded-lg text-sm" />
+                      <input type="email" placeholder="Email" value={companyInfo.email} onChange={(e) => setCompanyInfo({...companyInfo, email: e.target.value})} className="p-2 border rounded-lg text-sm" />
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-semibold">📄 Bills</h3>
+                    <div className="flex gap-2">
+                      <button onClick={() => setShowScanner(true)} className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700">📷 Scan</button>
+                      <button onClick={generateInvoice} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700">📄 Invoice</button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {bills.map(bill => (
+                      <div key={bill.id} className={`flex items-center gap-3 p-3 rounded-lg border ${bill.paid ? 'bg-gray-50' : 'bg-white'}`}>
+                        <button onClick={() => toggleBillPaid(bill.id)} className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${bill.paid ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>{bill.paid && '✓'}</button>
+                        <input type="text" value={bill.description} placeholder="Description" onChange={(e) => updateBill(bill.id, 'description', e.target.value)} className={`flex-1 bg-transparent outline-none ${bill.paid ? 'line-through text-gray-400' : ''}`} />
+                        <span className="text-gray-400">฿</span>
+                        <input type="number" value={bill.amount} placeholder="0" onChange={(e) => updateBill(bill.id, 'amount', e.target.value)} className={`w-24 text-right bg-transparent outline-none font-medium ${bill.paid ? 'line-through text-gray-400' : ''}`} />
+                        <input type="date" value={bill.dueDate} onChange={(e) => updateBill(bill.id, 'dueDate', e.target.value)} className="bg-transparent outline-none text-sm text-gray-500" />
+                        <button onClick={() => removeBill(bill.id)} className="text-red-400 hover:text-red-600">🗑️</button>
+                      </div>
+                    ))}
+                    <button onClick={addBill} className="w-full py-3 border-2 border-dashed rounded-lg text-gray-400 hover:border-gray-400">+ Add Bill</button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'activity' && (
+                <div className="space-y-2">
+                  <h3 className="font-semibold mb-3">📋 Recent Activity</h3>
+                  {activityLog.length === 0 ? <p className="text-gray-500 text-center py-8">No activity yet</p> : (
+                    [...activityLog].reverse().map((log, i) => (
+                      <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm">{log.user?.charAt(0)?.toUpperCase() || '?'}</div>
+                        <div className="flex-1">
+                          <p className="text-sm"><strong>{log.user}</strong> {log.action} {log.details}</p>
+                          <p className="text-xs text-gray-400">{new Date(log.time).toLocaleString('th-TH')}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Summary */}
+            {activeTab === 'bills' && (
+              <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-2xl p-4">
+                <div className="grid grid-cols-3 text-center">
+                  <div><div className="text-2xl font-bold">{totalBills}</div><div className="text-sm opacity-80">Total Bills</div></div>
+                  <div><div className="text-2xl font-bold">฿{unpaidTotal.toLocaleString()}</div><div className="text-sm opacity-80">Unpaid</div></div>
+                  <div><div className="text-2xl font-bold">฿{paidTotal.toLocaleString()}</div><div className="text-sm opacity-80">Paid</div></div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {showNamePrompt && <NamePrompt />}
+          {showScanner && <ScannerModal />}
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

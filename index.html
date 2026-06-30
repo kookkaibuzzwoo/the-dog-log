@@ -1,0 +1,1893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>The Dog Log 🐕</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Sheets sync via Apps Script (replaces Firebase) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .pulse { animation: pulse 2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    input[type="date"] { min-height: 44px; }
+    button { min-height: 44px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Google Sheets Configuration
+    const GSHEET_CONFIG = {
+      sheetId: '172vcvsfg_-9OUxfkpTjjjQ2geu08GvDEE0vZGjbmJGI',
+      publishedCsvBase: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSAbQAtv05Q_XPpRxi5G80VzDCCPYbZLnWnlZ7rA3oYGhx0wf44gr_hlO4o4yDrLhmL2-hdwPYaX6he/pub',
+      editUrl: 'https://docs.google.com/spreadsheets/d/172vcvsfg_-9OUxfkpTjjjQ2geu08GvDEE0vZGjbmJGI/edit',
+      copterSummaryGid: '1725162234'
+    };
+
+    const DEFAULT_MEDICATIONS = [
+      { id: 'nexgard', name: 'Nexgard', interval: 30, icon: '💊' },
+      { id: 'drontal', name: 'Drontal', interval: 90, icon: '💉' }
+    ];
+
+    const AVAILABLE_ICONS = ['💊', '💉', '🩺', '🏥', '💪', '🩹', '🧴', '🐾', '❤️', '⭐'];
+
+    // Default Google Apps Script Web App URL (public "Anyone" access — syncs without sign-in)
+    const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxaMGxWslhXYVAbTZihKLAGvTpb3ss49i_FSmuU2zBMgRVeqLbB-g8UjXeUZjp5MXKz/exec';
+
+    const App = () => {
+      const [dogs, setDogs] = useState([]);
+      const [bills, setBills] = useState([]);
+      const [donations, setDonations] = useState([]);
+      const [vetCosts, setVetCosts] = useState([]);
+      const [medications, setMedications] = useState(DEFAULT_MEDICATIONS);
+      const [companyInfo, setCompanyInfo] = useState({ name: '', address: '', email: '' });
+      const [activeTab, setActiveTab] = useState('donations');
+      const [userName, setUserName] = useState(() => localStorage.getItem('dogTracker_userName') || '');
+      const [showNamePrompt, setShowNamePrompt] = useState(false);
+      const [activityLog, setActivityLog] = useState([]);
+      const [syncStatus, setSyncStatus] = useState('local'); // 'local' | 'syncing' | 'synced' | 'error'
+      const [lastSync, setLastSync] = useState(null);
+      const [appsScriptUrl, setAppsScriptUrl] = useState(() => {
+        const stored = localStorage.getItem('dogLog_appsScriptUrl');
+        // Migrate the old Workspace-restricted URL (/a/macros/buzzwoo.de/) to the public default
+        if (!stored || stored.includes('/a/macros/')) return DEFAULT_APPS_SCRIPT_URL;
+        return stored;
+      });
+      const [showSyncPanel, setShowSyncPanel] = useState(false);
+      const [copterData, setCopterData] = useState([]);
+      const [copterLoading, setCopterLoading] = useState(false);
+      const [showScanner, setShowScanner] = useState(false);
+      const [isScanning, setIsScanning] = useState(false);
+      const [scanPreview, setScanPreview] = useState(null);
+      const [scannedItems, setScannedItems] = useState([]);
+      const [errorMessage, setErrorMessage] = useState('');
+      const [showMedSettings, setShowMedSettings] = useState(false);
+      const [newMed, setNewMed] = useState({ name: '', interval: 30, icon: '💊' });
+      const [slackWebhook, setSlackWebhook] = useState(() => localStorage.getItem('dogLog_slackWebhook') || '');
+      const [showSlackSettings, setShowSlackSettings] = useState(false);
+      const [slackStatus, setSlackStatus] = useState('');
+
+      // Employee info for Cash Advance Form
+      const [employeeInfo, setEmployeeInfo] = useState(() => {
+        const saved = localStorage.getItem('dogLog_employeeInfo');
+        return saved ? JSON.parse(saved) : { name: '', position: '', team: '', department: '', bankName: '', accountName: 'Saralee Lakphan', accountNo: '', promptpay: '1500900086631' };
+      });
+      const [showEmployeeSettings, setShowEmployeeSettings] = useState(false);
+      const [showCashAdvancePrompt, setShowCashAdvancePrompt] = useState(false);
+      const [pendingCashAdvanceItems, setPendingCashAdvanceItems] = useState([]);
+      const [viewingInvoiceImage, setViewingInvoiceImage] = useState(null);
+
+      const saveTimeoutRef = useRef(null);
+      const syncTimeoutRef = useRef(null);
+      const isLoadingRef = useRef(false);
+      const today = new Date();
+
+      // CSV Parser for Google Sheets published data
+      const parseCSV = (csv) => {
+        const lines = csv.split('\n');
+        if (lines.length < 1) return [];
+        // Parse header
+        const headerLine = lines[0];
+        const headers = [];
+        let current = '', inQuotes = false;
+        for (const char of headerLine) {
+          if (char === '"') { inQuotes = !inQuotes; }
+          else if (char === ',' && !inQuotes) { headers.push(current.trim()); current = ''; }
+          else { current += char; }
+        }
+        headers.push(current.trim());
+
+        const rows = [];
+        for (let i = 1; i < lines.length; i++) {
+          if (!lines[i].trim()) continue;
+          const values = [];
+          let val = '', inQ = false;
+          for (const ch of lines[i]) {
+            if (ch === '"') { inQ = !inQ; }
+            else if (ch === ',' && !inQ) { values.push(val.trim()); val = ''; }
+            else { val += ch; }
+          }
+          values.push(val.trim());
+          const row = {};
+          headers.forEach((h, idx) => { row[h] = (values[idx] || '').trim(); });
+          rows.push(row);
+        }
+        return rows;
+      };
+
+      // Normalize date strings from Google Sheets (e.g. "Thu Feb 05 2026 00:00:00 GMT+0700..." → "2026-02-05")
+      const normalizeDate = (dateStr) => {
+        if (!dateStr) return '';
+        // Already YYYY-MM-DD format
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+        // Try parsing as Date
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) {
+          return d.toISOString().split('T')[0];
+        }
+        return dateStr;
+      };
+
+      // Fix dog medication dates after reading from sheet
+      const normalizeDogDates = (dog) => {
+        const fixed = { ...dog };
+        Object.keys(fixed).forEach(key => {
+          if (fixed[key] && typeof fixed[key] === 'object' && fixed[key].lastGiven) {
+            fixed[key] = { ...fixed[key], lastGiven: normalizeDate(fixed[key].lastGiven) };
+          }
+        });
+        return fixed;
+      };
+
+      // Sync FROM Google Sheets (via Apps Script)
+      const syncFromSheets = async () => {
+        if (!appsScriptUrl) { setErrorMessage('Set Apps Script URL first'); return; }
+        setSyncStatus('syncing');
+        try {
+          const res = await fetch(appsScriptUrl);
+          if (!res.ok) throw new Error('Failed to fetch from Apps Script');
+          const data = await res.json();
+
+          // Only update if sheet actually has data (don't overwrite local data with empty sheets)
+          const hasSheetData = (data.dogs && data.dogs.length > 0) || (data.bills && data.bills.length > 0) || (data.medications && data.medications.length > 0);
+          if (!hasSheetData) {
+            console.log('Sheet is empty, keeping local data');
+            setSyncStatus('synced');
+            setErrorMessage('');
+            return;
+          }
+
+          isLoadingRef.current = true;
+          // Normalize dates from sheet format
+          if (data.dogs && data.dogs.length > 0) setDogs(data.dogs.map(normalizeDogDates));
+          if (data.bills && data.bills.length > 0) setBills(data.bills.map(b => ({ ...b, dueDate: normalizeDate(b.dueDate) })));
+          if (data.donations && data.donations.length > 0) setDonations(data.donations.map(d => ({ ...d, date: normalizeDate(d.date) })));
+          if (data.vetCosts && data.vetCosts.length > 0) {
+            setVetCosts(data.vetCosts.map(v => ({ ...v, date: normalizeDate(v.date) })));
+          } else if (data.companyInfo && data.companyInfo.mootooVetCost) {
+            // Legacy migration: single vet cost value → one dated entry
+            setVetCosts([{ id: Date.now(), description: 'Vet cost', amount: data.companyInfo.mootooVetCost, date: '' }]);
+          }
+          if (data.medications && data.medications.length > 0) setMedications(data.medications);
+          if (data.companyInfo && (data.companyInfo.name || data.companyInfo.mootooVetCost)) setCompanyInfo(data.companyInfo);
+          if (data.activityLog && data.activityLog.length > 0) setActivityLog(data.activityLog);
+
+          setLastSync(new Date());
+          setSyncStatus('synced');
+          setErrorMessage('');
+          localStorage.setItem('dogLog_backup', JSON.stringify(data));
+          setTimeout(() => { isLoadingRef.current = false; }, 100);
+        } catch (err) {
+          console.error('Sync from sheets error:', err);
+          setSyncStatus('error');
+          setErrorMessage(err.message);
+        }
+      };
+
+      // Sync TO Google Sheets (via Apps Script)
+      const saveToSheets = async () => {
+        if (!appsScriptUrl || isLoadingRef.current) return;
+        try {
+          const payload = { dogs, bills, donations, vetCosts, medications, companyInfo, activityLog };
+          await fetch(appsScriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(payload)
+          });
+          setLastSync(new Date());
+          setSyncStatus('synced');
+          localStorage.setItem('dogLog_backup', JSON.stringify(payload));
+        } catch (err) {
+          console.error('Save to sheets error:', err);
+          // Don't set error status for write failures, just log
+        }
+      };
+
+      // Export data as .xlsx file (backup / manual import to sheets)
+      const exportToExcel = () => {
+        const wb = XLSX.utils.book_new();
+        // Dogs sheet
+        const dogsHeaders = ['ID', 'Name'];
+        medications.forEach(med => { dogsHeaders.push(med.id + '_Last', med.id + '_By'); });
+        const dogsData = dogs.map(d => {
+          const row = { ID: d.id, Name: d.name };
+          medications.forEach(med => {
+            row[med.id + '_Last'] = d[med.id]?.lastGiven || '';
+            row[med.id + '_By'] = d[med.id]?.givenBy || '';
+          });
+          return row;
+        });
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dogsData.length ? dogsData : [{}], { header: dogsHeaders }), 'Dogs');
+        // Bills sheet
+        const billsData = bills.map(b => ({ ID: b.id, Description: b.description, Amount: b.amount, DueDate: b.dueDate, Paid: b.paid ? 'Yes' : 'No' }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(billsData.length ? billsData : [{ ID: '', Description: '', Amount: '', DueDate: '', Paid: '' }]), 'Bills');
+        // Donations sheet
+        const donationsData = donations.map(d => ({ ID: d.id, Donor: d.donor, Amount: d.amount, Date: d.date }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(donationsData.length ? donationsData : [{ ID: '', Donor: '', Amount: '', Date: '' }]), 'Donations');
+        // VetCosts sheet
+        const vetCostsData = vetCosts.map(v => ({ ID: v.id, Description: v.description, Amount: v.amount, Date: v.date }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vetCostsData.length ? vetCostsData : [{ ID: '', Description: '', Amount: '', Date: '' }]), 'VetCosts');
+        // Medications sheet
+        const medsData = medications.map(m => ({ ID: m.id, Name: m.name, Interval: m.interval, Icon: m.icon }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(medsData), 'Medications');
+        // Company sheet
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ Name: companyInfo.name, Address: companyInfo.address, Email: companyInfo.email, MootooVetCost: companyInfo.mootooVetCost || '' }]), 'Company');
+        // ActivityLog sheet
+        const logData = activityLog.map(l => ({ User: l.user, Action: l.action, Details: l.details, Time: l.time }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(logData.length ? logData : [{ User: '', Action: '', Details: '', Time: '' }]), 'ActivityLog');
+        XLSX.writeFile(wb, `dog-log-backup-${new Date().toISOString().split('T')[0]}.xlsx`);
+        logActivity('exported data', 'to Excel');
+      };
+
+      // Load Copter historical data from published CSV (summary tab)
+      const loadCopterData = async () => {
+        setCopterLoading(true);
+        try {
+          const res = await fetch(`${GSHEET_CONFIG.publishedCsvBase}?output=csv&gid=${GSHEET_CONFIG.copterSummaryGid}`);
+          if (!res.ok) throw new Error('Failed to fetch Copter data');
+          const csv = await res.text();
+          const rows = parseCSV(csv);
+          setCopterData(rows);
+        } catch (err) {
+          console.error('Copter data error:', err);
+        }
+        setCopterLoading(false);
+      };
+
+      // One-time migration: seed data from old Firebase backup
+      const FIREBASE_SEED_DATA = {
+        dogs: [
+          { id: 1770016201683, name: "Chok", "annual_vaccines_(rabies,_dhpp)__1770016941789": { givenBy: "kk", lastGiven: "2025-03-06" }, drontal: { givenBy: "kk", lastGiven: "2025-12-23" }, nexgard: { givenBy: "kk", lastGiven: "2026-02-05" } },
+          { id: 1770017118528, name: "Mootoo", "annual_vaccines_(rabies,_dhpp)__1770016941789": { givenBy: "kk", lastGiven: "2025-03-06" }, drontal: { givenBy: "kk", lastGiven: "2025-12-23" }, nexgard: { givenBy: "kk", lastGiven: "2026-02-05" } }
+        ],
+        medications: [
+          { icon: "💊", id: "nexgard", interval: 30, name: "Nexgard" },
+          { icon: "💊", id: "drontal", interval: 90, name: "Drontal" },
+          { icon: "💉", id: "annual_vaccines_(rabies,_dhpp)__1770016941789", interval: 365, name: "Annual Vaccines (Rabies, DHPP)" }
+        ],
+        bills: [
+          { id: 1770017015544, description: "Nexgard, Drontal and Medical Shampoo", amount: "1809", dueDate: "2025-12-16", paid: false },
+          { id: 1770280898610, batchId: 1770280898610, description: "Hervey (nang) SPT 15-30 Kg 1", amount: "1129", dueDate: "2026-02-05", paid: false }
+        ],
+        companyInfo: { name: "pet-vet-store.com", address: "", email: "" },
+        activityLog: [
+          { action: "gave Nexgard", details: "Chok", time: "2026-02-05T07:35:26.717Z", user: "kk" },
+          { action: "gave Nexgard", details: "Mootoo", time: "2026-02-05T07:35:29.628Z", user: "kk" },
+          { action: "scanned", details: "3 bills", time: "2026-02-05T08:32:35.267Z", user: "kk" },
+          { action: "generated cash advance form", details: "฿1,809", time: "2026-02-05T08:32:54.870Z", user: "kk" }
+        ]
+      };
+
+      // Initial load: localStorage → check if real data → seed if needed → sync
+      useEffect(() => {
+        let hasLocalData = false;
+        const backup = localStorage.getItem('dogLog_backup');
+        if (backup) {
+          try {
+            const data = JSON.parse(backup);
+            hasLocalData = data.dogs && data.dogs.length > 0;
+            if (hasLocalData) {
+              loadFromLocalStorage();
+            }
+          } catch (e) {}
+        }
+
+        if (!hasLocalData) {
+          if (appsScriptUrl) {
+            // Fresh browser but sync is configured: pull live data from the sheet.
+            // (syncFromSheets keeps local data if the sheet is empty.)
+            console.log('No local data, syncing from Google Sheets...');
+            setTimeout(() => syncFromSheets(), 500);
+          } else {
+            // No sync configured: seed from the one-time Firebase migration snapshot (offline fallback).
+            console.log('Seeding data from Firebase migration...');
+            setDogs(FIREBASE_SEED_DATA.dogs);
+            setBills(FIREBASE_SEED_DATA.bills);
+            setMedications(FIREBASE_SEED_DATA.medications);
+            setCompanyInfo(FIREBASE_SEED_DATA.companyInfo);
+            setActivityLog(FIREBASE_SEED_DATA.activityLog);
+            localStorage.setItem('dogLog_backup', JSON.stringify(FIREBASE_SEED_DATA));
+          }
+        } else if (appsScriptUrl) {
+          // Has local data already, sync from sheet
+          setTimeout(() => syncFromSheets(), 1000);
+        }
+      }, []);
+
+      const loadFromLocalStorage = () => {
+        const backup = localStorage.getItem('dogLog_backup');
+        if (backup) {
+          try {
+            const data = JSON.parse(backup);
+            if (data.dogs) setDogs(data.dogs);
+            if (data.bills) setBills(data.bills);
+            if (data.donations) setDonations(data.donations);
+            if (data.vetCosts) setVetCosts(data.vetCosts);
+            else if (data.companyInfo?.mootooVetCost) setVetCosts([{ id: Date.now(), description: 'Vet cost', amount: data.companyInfo.mootooVetCost, date: '' }]);
+            if (data.medications) setMedications(data.medications);
+            if (data.companyInfo) setCompanyInfo(data.companyInfo);
+            if (data.activityLog) setActivityLog(data.activityLog);
+          } catch (e) {}
+        }
+      };
+
+      // Auto-save to localStorage + sync to Google Sheets
+      useEffect(() => {
+        if (isLoadingRef.current) return;
+        if (dogs.length === 0 && bills.length === 0 && medications.length === DEFAULT_MEDICATIONS.length) return;
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = setTimeout(() => {
+          localStorage.setItem('dogLog_backup', JSON.stringify({ dogs, bills, donations, vetCosts, medications, companyInfo, activityLog }));
+          if (appsScriptUrl) saveToSheets();
+        }, 1000);
+      }, [dogs, bills, donations, vetCosts, medications, companyInfo, activityLog]);
+
+      // Save Apps Script URL to localStorage
+      useEffect(() => {
+        if (appsScriptUrl) localStorage.setItem('dogLog_appsScriptUrl', appsScriptUrl);
+      }, [appsScriptUrl]);
+
+      // Auto-poll from sheet every 30 seconds
+      useEffect(() => {
+        if (!appsScriptUrl) return;
+        const interval = setInterval(() => {
+          syncFromSheets();
+        }, 30000);
+        return () => clearInterval(interval);
+      }, [appsScriptUrl]);
+
+      // Lazy load Copter data when tab is selected
+      useEffect(() => {
+        if (activeTab === 'copter' && copterData.length === 0 && !copterLoading) {
+          loadCopterData();
+        }
+      }, [activeTab]);
+
+      useEffect(() => {
+        if (userName) localStorage.setItem('dogTracker_userName', userName);
+      }, [userName]);
+
+      useEffect(() => {
+        if (slackWebhook) localStorage.setItem('dogLog_slackWebhook', slackWebhook);
+      }, [slackWebhook]);
+
+      useEffect(() => {
+        localStorage.setItem('dogLog_employeeInfo', JSON.stringify(employeeInfo));
+      }, [employeeInfo]);
+
+      // Slack notification function
+      const sendSlackNotification = async (alertsToSend, isTest = false) => {
+        if (!slackWebhook) {
+          setSlackStatus('No webhook URL configured');
+          return false;
+        }
+
+        const overdueItems = alertsToSend.filter(a => a.days < 0 && !a.never);
+        const upcomingItems = alertsToSend.filter(a => a.days >= 0 && a.days <= 7 && !a.never);
+
+        if (!isTest && overdueItems.length === 0 && upcomingItems.length === 0) {
+          return false;
+        }
+
+        const blocks = [
+          {
+            type: "header",
+            text: { type: "plain_text", text: isTest ? "Test Notification" : "The Dog Log Alert", emoji: true }
+          }
+        ];
+
+        if (overdueItems.length > 0) {
+          blocks.push({
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Overdue Items:*\n" + overdueItems.map(a =>
+                a.dog ? `${a.icon} *${a.dog}* - ${a.med} (${Math.abs(a.days)} days overdue)`
+                      : `*${a.bill}* - ${a.amount} (${Math.abs(a.days)} days overdue)`
+              ).join('\n')
+            }
+          });
+        }
+
+        if (upcomingItems.length > 0) {
+          blocks.push({
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Due Soon:*\n" + upcomingItems.map(a =>
+                a.dog ? `${a.icon} *${a.dog}* - ${a.med} (${a.days === 0 ? 'today!' : a.days + ' days left'})`
+                      : `*${a.bill}* - ${a.amount} (${a.days === 0 ? 'today!' : a.days + ' days left'})`
+              ).join('\n')
+            }
+          });
+        }
+
+        if (isTest && overdueItems.length === 0 && upcomingItems.length === 0) {
+          blocks.push({
+            type: "section",
+            text: { type: "mrkdwn", text: "This is a test notification. No overdue or upcoming items at this time." }
+          });
+        }
+
+        try {
+          setSlackStatus('Sending...');
+          const response = await fetch(slackWebhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            mode: 'no-cors',
+            body: JSON.stringify({ blocks })
+          });
+          setSlackStatus('Sent!');
+          setTimeout(() => setSlackStatus(''), 3000);
+          return true;
+        } catch (err) {
+          setSlackStatus('Error: ' + err.message);
+          return false;
+        }
+      };
+
+      // Check and send daily Slack notification
+      useEffect(() => {
+        if (!slackWebhook || dogs.length === 0) return;
+
+        const lastNotified = localStorage.getItem('dogLog_lastSlackNotify');
+        const todayStr = today.toISOString().split('T')[0];
+
+        if (lastNotified === todayStr) return;
+
+        const currentAlerts = getAlerts();
+        const hasOverdue = currentAlerts.some(a => a.days < 0 && !a.never);
+
+        if (hasOverdue) {
+          sendSlackNotification(currentAlerts);
+          localStorage.setItem('dogLog_lastSlackNotify', todayStr);
+        }
+      }, [dogs, bills, slackWebhook]);
+
+
+      const logActivity = (action, details) => {
+        if (!userName) return;
+        setActivityLog(prev => [...prev.slice(-19), { user: userName, action, details, time: new Date().toISOString() }]);
+      };
+
+      // Medication Type Management
+      const addMedicationType = () => {
+        if (!newMed.name.trim()) return;
+        const id = newMed.name.toLowerCase().replace(/\s+/g, '_') + '_' + Date.now();
+        setMedications([...medications, { ...newMed, id, name: newMed.name.trim() }]);
+        setNewMed({ name: '', interval: 30, icon: '💊' });
+        logActivity('added medication type', newMed.name.trim());
+      };
+
+      const removeMedicationType = (id) => {
+        const med = medications.find(m => m.id === id);
+        if (med && confirm(`Remove "${med.name}" medication type? This won't delete existing records.`)) {
+          setMedications(medications.filter(m => m.id !== id));
+          logActivity('removed medication type', med.name);
+        }
+      };
+
+      const updateMedicationType = (id, field, value) => {
+        setMedications(medications.map(m => m.id === id ? { ...m, [field]: value } : m));
+      };
+
+      // Dog functions
+      const addDog = () => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const name = prompt('Enter dog name:');
+        if (name?.trim()) {
+          setDogs([...dogs, { id: Date.now(), name: name.trim() }]);
+          logActivity('added dog', name.trim());
+        }
+      };
+
+      const removeDog = (id) => {
+        const dog = dogs.find(d => d.id === id);
+        if (dog && confirm(`Remove ${dog.name}?`)) {
+          setDogs(dogs.filter(d => d.id !== id));
+          logActivity('removed dog', dog.name);
+        }
+      };
+
+      const updateDogName = (id, newName) => {
+        if (newName?.trim()) setDogs(dogs.map(d => d.id === id ? { ...d, name: newName.trim() } : d));
+      };
+
+      const updateMedicationDate = (dogId, medId, date) => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        setDogs(dogs.map(d => d.id === dogId ? { ...d, [medId]: { lastGiven: date, givenBy: userName } } : d));
+        const med = medications.find(m => m.id === medId);
+        logActivity(`updated ${med?.name || medId}`, dogs.find(d => d.id === dogId)?.name);
+      };
+
+      const giveMedication = (dogId, medId) => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const todayStr = today.toISOString().split('T')[0];
+        setDogs(dogs.map(d => d.id === dogId ? { ...d, [medId]: { lastGiven: todayStr, givenBy: userName } } : d));
+        const med = medications.find(m => m.id === medId);
+        logActivity(`gave ${med?.name || medId}`, dogs.find(d => d.id === dogId)?.name);
+      };
+
+      const getDaysUntilDue = (lastGiven, interval) => {
+        if (!lastGiven) return -999;
+        const due = new Date(new Date(lastGiven).getTime() + interval * 86400000);
+        return Math.ceil((due - today) / 86400000);
+      };
+
+      const getStatusColor = (days) => days === -999 ? 'gray' : days < 0 ? 'red' : days <= 7 ? 'yellow' : 'green';
+
+      // Bill functions
+      const addBill = () => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        setBills([...bills, { id: Date.now(), description: '', amount: '', dueDate: today.toISOString().split('T')[0], paid: false }]);
+      };
+
+      const updateBill = (id, field, value) => setBills(bills.map(b => b.id === id ? { ...b, [field]: value } : b));
+
+      const toggleBillPaid = (id) => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const bill = bills.find(b => b.id === id);
+        setBills(bills.map(b => b.id === id ? { ...b, paid: !b.paid } : b));
+        logActivity(bill?.paid ? 'unmarked' : 'paid', bill?.description);
+      };
+
+      const removeBill = (id) => {
+        const bill = bills.find(b => b.id === id);
+        if (confirm(`Remove "${bill?.description || 'bill'}"?`)) {
+          setBills(bills.filter(b => b.id !== id));
+          logActivity('removed', bill?.description);
+        }
+      };
+
+      // Donation functions
+      const addDonation = () => {
+        const today = new Date();
+        setDonations([...donations, { id: Date.now(), donor: '', amount: '', date: today.toISOString().split('T')[0] }]);
+      };
+      const updateDonation = (id, field, value) => setDonations(donations.map(d => d.id === id ? { ...d, [field]: value } : d));
+      const removeDonation = (id) => {
+        const donation = donations.find(d => d.id === id);
+        if (confirm(`Remove donation from "${donation?.donor || 'donor'}"?`)) {
+          setDonations(donations.filter(d => d.id !== id));
+          logActivity('removed donation', donation?.donor);
+        }
+      };
+
+      // Vet cost functions
+      const addVetCost = () => {
+        const today = new Date();
+        setVetCosts([...vetCosts, { id: Date.now(), description: '', amount: '', date: today.toISOString().split('T')[0] }]);
+      };
+      const updateVetCost = (id, field, value) => setVetCosts(vetCosts.map(v => v.id === id ? { ...v, [field]: value } : v));
+      const removeVetCost = (id) => {
+        const vc = vetCosts.find(v => v.id === id);
+        if (confirm(`Remove vet cost "${vc?.description || 'entry'}"?`)) {
+          setVetCosts(vetCosts.filter(v => v.id !== id));
+          logActivity('removed vet cost', vc?.description);
+        }
+      };
+
+      // Find invoice image for a bill (may be stored on another bill in same batch)
+      const getInvoiceImage = (bill) => {
+        if (bill.invoiceImage) return bill.invoiceImage;
+        if (bill.batchId) {
+          const batchBill = bills.find(b => b.batchId === bill.batchId && b.invoiceImage);
+          return batchBill?.invoiceImage;
+        }
+        return null;
+      };
+
+      // Invoice parsing patterns for Thai invoices
+      const INVOICE_PATTERNS = {
+        // Keywords that START the product table area
+        tableStartKeywords: ['รายการสั่งซื้อ', 'สินค้า', 'product', 'รายการ', 'description'],
+        // Keywords that END the product table area (summary section)
+        tableEndKeywords: ['มูลค่าสินค้ารวม', 'product price total', 'รวมทั้งหมด', 'ยอดรวม', 'all total', 'grand total', 'subtotal'],
+        // Keywords to always skip
+        skipKeywords: ['ค่าจัดส่ง', 'delivery fee', 'vat', 'ภาษี', 'ส่วนลด', 'discount', 'ชำระสำเร็จ', 'คัดลอก', 'สั่งซื้อ', 'รอชำระเงิน', 'ได้รับเงิน', 'จัดเตรียมสินค้า', 'เตรียมจัดส่ง', 'จัดส่ง', 'เสร็จสิ้น', 'ซ่อนสถานะ', 'flash', 'ส่งฟรี', 'โปรโมชั่น', 'qr payment', 'ที่อยู่จัดส่ง', 'รูปแบบการชำระเงิน', 'หมายเลขพัสดุ', 'คำสั่งซื้อหมายเลข', 'สั่งซื้อเมื่อ'],
+        // Product indicators - lines with these are likely products
+        productIndicators: ['kg', 'ml', 'กก', 'กรัม', 'ชิ้น', 'แพ็ค', 'กล่อง', 'ขวด', 'เม็ด', 'dog', 'cat', 'shampoo', 'spt', 'dron', 'natural'],
+      };
+
+      const parseThaiInvoice = (text) => {
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+        const items = [];
+        const seenAmounts = new Set();
+
+        // Price pattern: must have .00 decimal (Thai invoice standard)
+        const pricePattern = /(\d{1,3}(?:,\d{3})*\.\d{2})/g;
+
+        // Find the product table boundaries
+        let inProductTable = false;
+        let tableStartIndex = -1;
+        let tableEndIndex = lines.length;
+
+        for (let i = 0; i < lines.length; i++) {
+          const lineLower = lines[i].toLowerCase();
+
+          // Check for table start
+          if (!inProductTable && INVOICE_PATTERNS.tableStartKeywords.some(kw => lineLower.includes(kw.toLowerCase()))) {
+            // Look for header row with price/unit columns
+            if (lineLower.includes('ราคา') || lineLower.includes('price') || lineLower.includes('total') || lineLower.includes('รวม')) {
+              inProductTable = true;
+              tableStartIndex = i + 1; // Start after header
+              console.log('Table starts at line:', i, lines[i]);
+            }
+          }
+
+          // Check for table end
+          if (inProductTable && INVOICE_PATTERNS.tableEndKeywords.some(kw => lineLower.includes(kw.toLowerCase()))) {
+            tableEndIndex = i;
+            console.log('Table ends at line:', i, lines[i]);
+            break;
+          }
+        }
+
+        console.log('Product table range:', tableStartIndex, 'to', tableEndIndex);
+
+        // If we didn't find clear boundaries, try to find product lines by indicators
+        if (tableStartIndex === -1) {
+          tableStartIndex = 0;
+          console.log('No clear table start found, scanning all lines with product indicators');
+        }
+
+        // Parse only lines within the product table
+        for (let i = tableStartIndex; i < tableEndIndex; i++) {
+          const originalLine = lines[i];
+          const lineLower = originalLine.toLowerCase();
+
+          // Skip if line contains skip keywords
+          if (INVOICE_PATTERNS.skipKeywords.some(kw => lineLower.includes(kw.toLowerCase()))) {
+            continue;
+          }
+
+          // Find prices in this line
+          const priceMatches = originalLine.match(pricePattern);
+          if (!priceMatches || priceMatches.length === 0) continue;
+
+          // Check if line has product indicators OR has multiple price columns (unit price + total)
+          const hasProductIndicator = INVOICE_PATTERNS.productIndicators.some(kw => lineLower.includes(kw.toLowerCase()));
+          const hasMultiplePrices = priceMatches.length >= 2;
+
+          // Only process if it looks like a product line
+          if (!hasProductIndicator && !hasMultiplePrices) {
+            console.log('Skipping non-product line:', originalLine);
+            continue;
+          }
+
+          // Get prices as numbers
+          const prices = priceMatches.map(m => parseFloat(m.replace(/,/g, ''))).filter(p => p >= 50 && p < 50000);
+
+          if (prices.length === 0) continue;
+
+          // For product lines with format: Description | Unit Price | Qty | Total
+          // We want the LAST price (Total column)
+          const amount = prices[prices.length - 1];
+
+          // Skip duplicate amounts
+          const amountKey = amount.toFixed(2);
+          if (seenAmounts.has(amountKey)) continue;
+          seenAmounts.add(amountKey);
+
+          // Extract description
+          let description = originalLine
+            .replace(pricePattern, '')  // Remove prices
+            .replace(/[฿$]/g, '')       // Remove currency symbols
+            .replace(/^\d+[\.\s]*/g, '') // Remove leading item numbers like "1." or "1 "
+            .replace(/\s+/g, ' ')        // Normalize spaces
+            .trim();
+
+          // If description is too short, check adjacent lines
+          if (description.length < 5 && i > 0) {
+            const prevLine = lines[i - 1];
+            if (!pricePattern.test(prevLine) && prevLine.length > 3) {
+              description = prevLine.trim() + ' ' + description;
+            }
+          }
+
+          // Truncate long descriptions
+          if (description.length > 60) {
+            description = description.substring(0, 60).trim() + '...';
+          }
+
+          if (description.length >= 3) {
+            items.push({
+              id: Date.now() + Math.random(),
+              description: description || 'Item',
+              amount,
+              selected: true
+            });
+            console.log('Found product:', description, '→', amount);
+          }
+        }
+
+        return items;
+      };
+
+      // Image pre-processing for better OCR
+      const preprocessImage = (imageSrc) => {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            // Scale up for better OCR (2x)
+            const scale = 2;
+            canvas.width = img.width * scale;
+            canvas.height = img.height * scale;
+
+            // Draw scaled image
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            // Get image data for processing
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+
+            // Convert to grayscale and increase contrast
+            for (let i = 0; i < data.length; i += 4) {
+              // Grayscale
+              const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+
+              // Increase contrast (factor of 1.5)
+              const contrast = 1.5;
+              const factor = (259 * (contrast * 100 + 255)) / (255 * (259 - contrast * 100));
+              let newGray = factor * (gray - 128) + 128;
+
+              // Threshold to make text sharper (binarization)
+              // Values below 180 become black, above become white
+              newGray = newGray < 180 ? 0 : 255;
+
+              data[i] = newGray;     // R
+              data[i + 1] = newGray; // G
+              data[i + 2] = newGray; // B
+              // Alpha stays the same
+            }
+
+            ctx.putImageData(imageData, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+          };
+          img.src = imageSrc;
+        });
+      };
+
+      // Scanner
+      const handleImageUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          setScanPreview(event.target.result);
+          setIsScanning(true);
+          setScannedItems([]);
+          try {
+            // Pre-process image for better OCR
+            console.log('Pre-processing image...');
+            const processedImage = await preprocessImage(event.target.result);
+            console.log('Image processed, starting OCR...');
+
+            // Use English for better number recognition
+            const result = await Tesseract.recognize(processedImage, 'eng', {
+              logger: m => {
+                if (m.status === 'recognizing text') {
+                  console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`);
+                }
+              }
+            });
+
+            console.log('OCR Raw Text:', result.data.text);
+
+            // Use smart Thai invoice parser
+            const items = parseThaiInvoice(result.data.text);
+
+            // Fallback to simple parsing if no items found
+            if (items.length === 0) {
+              const fallbackItems = [];
+              result.data.text.split('\n').forEach(line => {
+                const numbers = line.match(/[\d,]+\.?\d*/g);
+                numbers?.forEach(num => {
+                  const amount = parseFloat(num.replace(/,/g, ''));
+                  if (amount >= 10 && amount < 100000) {
+                    fallbackItems.push({
+                      id: Date.now() + Math.random(),
+                      description: line.replace(num, '').replace(/[฿$]/g, '').trim().substring(0, 50) || 'Item',
+                      amount,
+                      selected: true
+                    });
+                  }
+                });
+              });
+              setScannedItems(fallbackItems);
+            } else {
+              setScannedItems(items);
+            }
+          } catch (err) {
+            console.error('Scan error:', err);
+            alert('Scan error: ' + err.message);
+          }
+          setIsScanning(false);
+        };
+        reader.readAsDataURL(file);
+      };
+
+      // Scanner helper functions
+      const toggleScannedItem = (id) => setScannedItems(scannedItems.map(i => i.id === id ? {...i, selected: !i.selected} : i));
+      const selectAllItems = () => setScannedItems(scannedItems.map(i => ({...i, selected: true})));
+      const unselectAllItems = () => setScannedItems(scannedItems.map(i => ({...i, selected: false})));
+
+      const addScannedItems = () => {
+        const selected = scannedItems.filter(i => i.selected);
+        if (!selected.length) {
+          alert('No items selected');
+          return;
+        }
+
+        // Create a batch ID to link bills with their invoice image
+        const batchId = Date.now();
+
+        // Add bills with invoice image reference
+        const newBills = selected.map((i, idx) => ({
+          id: batchId + idx + Math.random(),
+          description: i.description || 'Item',
+          amount: String(i.amount || 0),
+          dueDate: today.toISOString().split('T')[0],
+          paid: false,
+          invoiceImage: idx === 0 ? scanPreview : null, // Store image only on first item to save space
+          batchId: batchId
+        }));
+        setBills(prev => [...prev, ...newBills]);
+        logActivity('scanned', `${selected.length} bills`);
+
+        // Store for Cash Advance prompt
+        const itemsForCashAdvance = selected.map(i => ({...i}));
+        setPendingCashAdvanceItems(itemsForCashAdvance);
+
+        // Close scanner
+        setShowScanner(false);
+        setScannedItems([]);
+        setScanPreview(null);
+
+        // Show Cash Advance prompt
+        setShowCashAdvancePrompt(true);
+      };
+
+      // Cash Advance Form functions
+      const toggleCashAdvanceItem = (id) => setPendingCashAdvanceItems(prev => prev.map(i => i.id === id ? {...i, selected: !i.selected} : i));
+      const selectAllCashAdvanceItems = () => setPendingCashAdvanceItems(prev => prev.map(i => ({...i, selected: true})));
+      const unselectAllCashAdvanceItems = () => setPendingCashAdvanceItems(prev => prev.map(i => ({...i, selected: false})));
+
+      const handleCashAdvanceResponse = (generate) => {
+        const selected = pendingCashAdvanceItems.filter(i => i.selected !== false);
+        if (generate && selected.length > 0) {
+          if (!employeeInfo.name && !userName) { setShowEmployeeSettings(true); return; }
+          generateCashAdvanceForm(selected);
+        }
+        setPendingCashAdvanceItems([]);
+        setShowCashAdvancePrompt(false);
+      };
+
+      const generateCashAdvanceForm = (items) => {
+        if (!items || items.length === 0) { alert('No items!'); return; }
+        const wb = XLSX.utils.book_new();
+        const grandTotal = items.reduce((sum, i) => sum + (parseFloat(i.amount) || 0), 0);
+        const requestingDate = today.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
+        const dateNeeded = new Date(today.getTime() + 4 * 86400000).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: '2-digit' });
+
+        const wsData = [
+          // Row 1: Logo placeholder
+          ['', '', '', '', '', '', '', ''],
+          // Row 2: Company name
+          ['', '', companyInfo.name || 'Buzzwoo Asia Co., Ltd.', '', '', '', '', ''],
+          // Row 3: Empty
+          ['', '', '', '', '', '', '', ''],
+          // Row 4: Title
+          ['', 'CASH ADVANCE FORM', '', '', '', '', '', ''],
+          // Row 5-8: Employee info
+          ['Name', `: ${employeeInfo.name || userName || ''}`, '', '', 'Requesting Date', `: ${requestingDate}`, '', ''],
+          ['Position', `: ${employeeInfo.position || ''}`, '', '', '', '', '', ''],
+          ['Team', `: ${employeeInfo.team || ''}`, '', '', 'Date Needed', `: ${dateNeeded}`, '', ''],
+          ['Department', `: ${employeeInfo.department || ''}`, '', '', '', '', '', ''],
+          // Row 9-10: Empty
+          ['', '', '', '', '', '', '', ''],
+          ['', '', '', '', '', '', '', ''],
+          // Row 11-12: Amount & Purpose
+          ['Amount Requested', `: ${grandTotal}`, '', '', '', '', '', ''],
+          ['Purpose', ': To prevent fleas & ticks & deworming monthly', '', '', '', '', '', ''],
+          // Row 13: Empty
+          ['', '', '', '', '', '', '', ''],
+          // Row 14: Table Header
+          ['Item', 'Description', '', '', 'Quantity', 'Unit Price', 'Total', ''],
+        ];
+
+        // Add items (rows 15+)
+        items.forEach((item, idx) => {
+          const amt = parseFloat(item.amount) || 0;
+          wsData.push([idx + 1, item.description || 'Item', '', '', 1, amt.toLocaleString('en-US', {minimumFractionDigits: 2}), amt.toLocaleString('en-US', {minimumFractionDigits: 2}), '']);
+        });
+
+        // Add empty rows for items (up to 7 total)
+        for (let i = 0; i < Math.max(0, 7 - items.length); i++) wsData.push(['', '', '', '', '', '', '', '']);
+
+        // Grand Total row
+        wsData.push(['', '', '', '', 'Grand Total', '', grandTotal, '']);
+        // Empty row
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Acknowledgment
+        wsData.push(['I acknowledged that I have read and fully understand the cash advance policy', '', '', '', '', '', '', '']);
+        // Empty row
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Signature & Payment preference
+        wsData.push(['', '', 'Preferred', 'Cash', '', '', '', '']);
+        wsData.push(['', '', '', 'Transfer to Bank Account', '', '', '', '']);
+        // Req. Signature row
+        wsData.push(['Req. Signature', '', 'Bank Name', `: ${employeeInfo.bankName || ''}`, '', '', '', '']);
+        // Bank details
+        wsData.push(['', '', 'Account Name', `: ${employeeInfo.accountName || ''}`, '', '', '', '']);
+        wsData.push(['', '', 'Account No', `: ${employeeInfo.accountNo || ''}`, '', '', '', '']);
+        wsData.push(['', '', 'Promptpay', `: ${employeeInfo.promptpay || ''}`, '', '', '', '']);
+        // Empty row
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Empty row
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Amount Approved
+        wsData.push(['Amount Approved :', '', '', '', '', '', '', '']);
+        // Comment
+        wsData.push(['Comment', ':', '', '', '', '', '', '']);
+        // Empty rows
+        wsData.push(['', '', '', '', '', '', '', '']);
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Approval section header
+        wsData.push(['', 'Approved by', '', 'Checked by', '', 'Received by', '', '']);
+        // Empty row
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Empty row
+        wsData.push(['', '', '', '', '', '', '', '']);
+        // Name row
+        wsData.push(['Name:', '', 'Name:', '', 'Name:', '', '', '']);
+        // Date row
+        wsData.push(['Date:', '', 'Date:', '', 'Date:', '', '', '']);
+
+        const ws = XLSX.utils.aoa_to_sheet(wsData);
+        ws['!cols'] = [{wch:15}, {wch:25}, {wch:15}, {wch:20}, {wch:12}, {wch:15}, {wch:10}, {wch:5}];
+
+        // Merges
+        const merges = [
+          {s:{r:1,c:2}, e:{r:1,c:5}},  // Company name
+          {s:{r:3,c:1}, e:{r:3,c:6}},  // CASH ADVANCE FORM title
+          {s:{r:11,c:1}, e:{r:11,c:3}}, // Purpose value
+        ];
+        // Merge description columns for each item
+        items.forEach((_, i) => merges.push({s:{r:14+i,c:1}, e:{r:14+i,c:3}}));
+        // Acknowledgment row merge
+        const ackRow = 14 + Math.max(items.length, 7) + 2;
+        merges.push({s:{r:ackRow,c:0}, e:{r:ackRow,c:6}});
+
+        ws['!merges'] = merges;
+        XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+        const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][today.getMonth()];
+        XLSX.writeFile(wb, `Monthly (${month}) NexGard & Drontal.xlsx`);
+        logActivity('generated cash advance form', `฿${grandTotal.toLocaleString()}`);
+      };
+
+      const generateInvoice = () => {
+        const unpaid = bills.filter(b => !b.paid);
+        if (!unpaid.length) { alert('No unpaid bills!'); return; }
+        const total = unpaid.reduce((s, b) => s + (parseFloat(b.amount) || 0), 0);
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Invoice</title><style>body{font-family:Arial;max-width:800px;margin:0 auto;padding:20px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:10px}th{background:#f5f5f5}</style></head><body><h1>🐕 The Dog Log - Invoice</h1><p>${today.toLocaleDateString('th-TH')}</p>${companyInfo.name ? `<p><b>To:</b> ${companyInfo.name}</p>` : ''}<table><tr><th>Description</th><th>Amount (฿)</th></tr>${unpaid.map(b => `<tr><td>${b.description}</td><td style="text-align:right">${parseFloat(b.amount).toLocaleString()}</td></tr>`).join('')}</table><p style="font-size:1.2em;text-align:right"><b>Total: ฿${total.toLocaleString()}</b></p></body></html>`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+        a.download = `invoice-${today.toISOString().split('T')[0]}.html`;
+        a.click();
+      };
+
+      const getAlerts = () => {
+        const alerts = [];
+        dogs.forEach(dog => {
+          medications.forEach(med => {
+            const days = getDaysUntilDue(dog[med.id]?.lastGiven, med.interval);
+            if (days <= 7) alerts.push({ dog: dog.name, med: med.name, days, icon: med.icon, never: days === -999 });
+          });
+        });
+        bills.filter(b => !b.paid).forEach(b => {
+          const days = Math.ceil((new Date(b.dueDate) - today) / 86400000);
+          if (days <= 7) alerts.push({ bill: b.description, amount: b.amount, days });
+        });
+        return alerts.sort((a, b) => (a.days ?? 999) - (b.days ?? 999));
+      };
+
+      const formatDate = (dateStr) => {
+        if (!dateStr) return 'Never';
+        return new Date(dateStr).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      };
+
+      const alerts = getAlerts();
+      const unpaidTotal = bills.filter(b => !b.paid).reduce((s, b) => s + (parseFloat(b.amount) || 0), 0);
+      const paidTotal = bills.filter(b => b.paid).reduce((s, b) => s + (parseFloat(b.amount) || 0), 0);
+      const mootooVetCost = vetCosts.reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
+      const donationsTotal = donations.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0);
+      const donationBalance = donationsTotal - mootooVetCost;
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-3 sm:p-4">
+          <div className="max-w-4xl mx-auto space-y-3 sm:space-y-4">
+
+            {/* Header - Mobile Optimized */}
+            <div className="bg-white rounded-2xl shadow-sm p-3 sm:p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <span className="text-2xl sm:text-3xl">🐕</span>
+                  <div>
+                    <h1 className="text-lg sm:text-xl font-bold">The Dog Log</h1>
+                    <p className="text-xs sm:text-sm text-gray-500 hidden sm:block">Office Medication & Bill Tracker</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap ${syncStatus === 'synced' ? 'bg-green-100 text-green-700' : syncStatus === 'error' ? 'bg-red-100 text-red-700' : syncStatus === 'syncing' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'}`}>
+                    {syncStatus === 'synced' ? '🟢 Synced' : syncStatus === 'error' ? '🔴 Error' : syncStatus === 'syncing' ? '🟡 Syncing...' : '📊 Local'}
+                  </span>
+                  {appsScriptUrl && <button onClick={syncFromSheets} disabled={syncStatus === 'syncing'} className="px-2 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs" title="Sync from Sheet">🔄</button>}
+                  <button onClick={() => setShowSyncPanel(!showSyncPanel)} className="px-2 py-1.5 bg-green-100 text-green-700 rounded-full text-xs" title="Google Sheets Sync">📊</button>
+                  <button onClick={() => setShowSlackSettings(!showSlackSettings)} className={`px-2 py-1.5 rounded-full text-xs ${slackWebhook ? 'bg-purple-100 text-purple-700' : 'bg-gray-100'}`} title="Slack notifications">
+                    {slackWebhook ? '🔔' : '🔕'}
+                  </button>
+                  <button onClick={() => setShowEmployeeSettings(true)} className="px-2 py-1.5 bg-gray-100 rounded-full text-xs" title="Employee Settings">
+                    ⚙️
+                  </button>
+                  <button onClick={() => setUserName(prompt('Name:', userName) || userName)} className="px-2 sm:px-3 py-1.5 bg-gray-100 rounded-full text-xs sm:text-sm whitespace-nowrap">
+                    👤 {userName || 'Set Name'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Slack Settings */}
+            {showSlackSettings && (
+              <div className="bg-white rounded-2xl shadow-sm p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-semibold">Slack Notifications</h3>
+                  <button onClick={() => setShowSlackSettings(false)} className="text-gray-400 text-xl">&times;</button>
+                </div>
+                <p className="text-sm text-gray-600 mb-3">
+                  Get notified in Slack when medications are overdue. Create an incoming webhook in your Slack workspace and paste the URL below.
+                </p>
+                <div className="space-y-3">
+                  <input
+                    type="url"
+                    value={slackWebhook}
+                    onChange={e => setSlackWebhook(e.target.value)}
+                    placeholder="https://hooks.slack.com/services/..."
+                    className="w-full p-3 border rounded-lg text-sm"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => sendSlackNotification(getAlerts(), true)}
+                      disabled={!slackWebhook}
+                      className="flex-1 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                    >
+                      Send Test
+                    </button>
+                    <button
+                      onClick={() => { setSlackWebhook(''); localStorage.removeItem('dogLog_slackWebhook'); localStorage.removeItem('dogLog_lastSlackNotify'); }}
+                      className="px-4 py-2 bg-gray-200 rounded-lg text-sm"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {slackStatus && (
+                    <p className={`text-sm ${slackStatus.includes('Error') ? 'text-red-600' : 'text-green-600'}`}>
+                      {slackStatus}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Google Sheets Sync Panel */}
+            {showSyncPanel && (
+              <div className="bg-white rounded-2xl shadow-sm p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-semibold">📊 Google Sheets Sync</h3>
+                  <button onClick={() => setShowSyncPanel(false)} className="text-gray-400 text-xl">&times;</button>
+                </div>
+                <p className="text-sm text-gray-600 mb-3">
+                  Connect to Google Sheets for auto-sync. Paste your Apps Script web app URL below.
+                </p>
+                <div className="space-y-3">
+                  <input
+                    type="url"
+                    value={appsScriptUrl}
+                    onChange={e => setAppsScriptUrl(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    className="w-full p-3 border rounded-lg text-sm"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={syncFromSheets} disabled={!appsScriptUrl || syncStatus === 'syncing'} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
+                      {syncStatus === 'syncing' ? 'Syncing...' : '🔄 Load from Sheet'}
+                    </button>
+                    <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium">
+                      📥 Export .xlsx
+                    </button>
+                    <a href={GSHEET_CONFIG.editUrl} target="_blank" className="px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium inline-flex items-center">
+                      📝 Open Sheet
+                    </a>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
+                    <p className="font-medium mb-1">Setup:</p>
+                    <ol className="list-decimal list-inside space-y-1">
+                      <li>Open your Google Sheet → Extensions → Apps Script</li>
+                      <li>Paste the provided script code</li>
+                      <li>Deploy → New Deployment → Web App → Anyone → Deploy</li>
+                      <li>Copy the URL and paste it above</li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Sync Status */}
+            {lastSync && syncStatus === 'synced' && (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-2 text-center">
+                <span className="text-green-700 text-xs sm:text-sm">✓ Synced with Google Sheets {lastSync.toLocaleTimeString('th-TH')}</span>
+              </div>
+            )}
+
+            {/* Error Message */}
+            {syncStatus === 'error' && (
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                <p className="text-red-700 text-sm font-medium">⚠️ Sync Error</p>
+                <p className="text-red-600 text-xs mt-1">
+                  {errorMessage || 'Could not connect to Google Sheets.'}
+                  {!appsScriptUrl && ' Set up Apps Script URL in the sync panel (📊 button).'}
+                </p>
+              </div>
+            )}
+
+            {/* Alerts */}
+            {alerts.length > 0 && (
+              <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-2xl p-3 sm:p-4">
+                <h3 className="font-semibold text-orange-700 mb-2 text-sm sm:text-base">🔔 Alerts</h3>
+                <div className="space-y-2">
+                  {alerts.slice(0, 3).map((a, i) => (
+                    <div key={i} className="flex justify-between items-center bg-white/80 rounded-lg px-3 py-2">
+                      <span className="text-sm truncate flex-1 mr-2">
+                        {a.dog ? <>{a.icon} <b>{a.dog}</b> - {a.med}</> : <>📄 {a.bill}</>}
+                      </span>
+                      <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap ${a.never ? 'bg-gray-100' : a.days < 0 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                        {a.never ? 'Never' : a.days < 0 ? `${Math.abs(a.days)}d late` : `${a.days}d`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tabs */}
+            <div className="flex bg-white rounded-2xl p-1.5 shadow-sm overflow-x-auto">
+              {[
+                { id: 'donations', label: '💝 Donations' },
+                { id: 'medications', label: '💊 Meds' },
+                { id: 'bills', label: '📄 Bills' },
+                { id: 'copter', label: '🐕 Copter' },
+                { id: 'activity', label: '📋 Log' }
+              ].map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'hover:bg-gray-100'}`}>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Donations summary (shown directly under tabs for quick visibility) */}
+            {activeTab === 'donations' && (
+              <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                {/* Raised — money in */}
+                <div className="rounded-2xl p-3 sm:p-4 text-center bg-emerald-50 border border-emerald-100">
+                  <div className="text-base sm:text-lg leading-none mb-1">💝</div>
+                  <div className="text-base sm:text-2xl font-bold text-emerald-700 leading-tight break-all">฿{donationsTotal.toLocaleString()}</div>
+                  <div className="text-[11px] sm:text-xs font-medium text-emerald-600/80 mt-0.5">Raised</div>
+                </div>
+                {/* Vet Cost — money out */}
+                <div className="rounded-2xl p-3 sm:p-4 text-center bg-amber-50 border border-amber-100">
+                  <div className="text-base sm:text-lg leading-none mb-1">🩺</div>
+                  <div className="text-base sm:text-2xl font-bold text-amber-700 leading-tight break-all">฿{mootooVetCost.toLocaleString()}</div>
+                  <div className="text-[11px] sm:text-xs font-medium text-amber-600/80 mt-0.5">Vet Cost</div>
+                </div>
+                {/* Net result — emphasized */}
+                <div className={`rounded-2xl p-3 sm:p-4 text-center text-white shadow-md ${donationBalance >= 0 ? 'bg-gradient-to-br from-emerald-500 to-green-600' : 'bg-gradient-to-br from-rose-500 to-red-600'}`}>
+                  <div className="text-base sm:text-lg leading-none mb-1">{donationBalance >= 0 ? '🎉' : '⚠️'}</div>
+                  <div className="text-base sm:text-2xl font-bold leading-tight break-all">{donationBalance >= 0 ? '+' : '−'}฿{Math.abs(donationBalance).toLocaleString()}</div>
+                  <div className="text-[11px] sm:text-xs font-semibold opacity-90 mt-0.5">{donationBalance >= 0 ? 'Surplus' : 'Shortfall'}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Content */}
+            <div className="bg-white rounded-2xl shadow-sm p-3 sm:p-4">
+              {activeTab === 'medications' && (
+                <div className="space-y-4">
+                  {/* Medication Types Settings */}
+                  <details className="bg-purple-50 rounded-xl" open={showMedSettings}>
+                    <summary className="p-3 font-semibold cursor-pointer flex items-center justify-between" onClick={(e) => { e.preventDefault(); setShowMedSettings(!showMedSettings); }}>
+                      <span>⚙️ Medication Types ({medications.length})</span>
+                      <span className="text-purple-600 text-sm">{showMedSettings ? '▲' : '▼'}</span>
+                    </summary>
+                    {showMedSettings && (
+                      <div className="p-3 pt-0 space-y-3">
+                        {/* Existing Medications */}
+                        <div className="space-y-2">
+                          {medications.map(med => (
+                            <div key={med.id} className="flex items-center gap-2 bg-white p-2 rounded-lg">
+                              <select
+                                value={med.icon}
+                                onChange={e => updateMedicationType(med.id, 'icon', e.target.value)}
+                                className="text-xl bg-transparent border rounded p-1"
+                              >
+                                {AVAILABLE_ICONS.map(icon => <option key={icon} value={icon}>{icon}</option>)}
+                              </select>
+                              <input
+                                value={med.name}
+                                onChange={e => updateMedicationType(med.id, 'name', e.target.value)}
+                                className="flex-1 min-w-0 p-2 border rounded text-sm"
+                                placeholder="Name"
+                              />
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  value={med.interval}
+                                  onChange={e => updateMedicationType(med.id, 'interval', parseInt(e.target.value) || 1)}
+                                  className="w-16 p-2 border rounded text-sm text-center"
+                                  min="1"
+                                />
+                                <span className="text-xs text-gray-500">days</span>
+                              </div>
+                              <button
+                                onClick={() => removeMedicationType(med.id)}
+                                className="text-red-400 hover:text-red-600 p-2"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Add New Medication Type */}
+                        <div className="border-t pt-3">
+                          <p className="text-sm font-medium text-gray-600 mb-2">Add New Type:</p>
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={newMed.icon}
+                              onChange={e => setNewMed({...newMed, icon: e.target.value})}
+                              className="text-xl bg-white border rounded p-1"
+                            >
+                              {AVAILABLE_ICONS.map(icon => <option key={icon} value={icon}>{icon}</option>)}
+                            </select>
+                            <input
+                              value={newMed.name}
+                              onChange={e => setNewMed({...newMed, name: e.target.value})}
+                              className="flex-1 min-w-0 p-2 border rounded text-sm"
+                              placeholder="e.g. Vaccine"
+                            />
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                value={newMed.interval}
+                                onChange={e => setNewMed({...newMed, interval: parseInt(e.target.value) || 1})}
+                                className="w-16 p-2 border rounded text-sm text-center"
+                                min="1"
+                                placeholder="30"
+                              />
+                              <span className="text-xs text-gray-500">days</span>
+                            </div>
+                            <button
+                              onClick={addMedicationType}
+                              disabled={!newMed.name.trim()}
+                              className="px-3 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                            >
+                              + Add
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </details>
+
+                  <div className="flex justify-between items-center">
+                    <h2 className="font-semibold text-base sm:text-lg">🐕 Dogs</h2>
+                    <button onClick={addDog} className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium">+ Add</button>
+                  </div>
+                  {dogs.length === 0 ? (
+                    <p className="text-center py-8 text-gray-500">No dogs yet</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {dogs.map(dog => (
+                        <div key={dog.id} className="border rounded-xl p-3 sm:p-4">
+                          <div className="flex justify-between items-center mb-3">
+                            <input defaultValue={dog.name} onBlur={e => updateDogName(dog.id, e.target.value)} className="font-bold text-base sm:text-lg bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none flex-1 mr-2" />
+                            <button onClick={() => removeDog(dog.id)} className="text-red-400 text-sm px-2 py-1">Remove</button>
+                          </div>
+
+                          {/* Medication Cards - Stack on mobile */}
+                          <div className="space-y-3">
+                            {medications.map(med => {
+                              const days = getDaysUntilDue(dog[med.id]?.lastGiven, med.interval);
+                              const color = getStatusColor(days);
+                              const bgColor = color === 'red' ? 'bg-red-50 border-red-200' : color === 'yellow' ? 'bg-yellow-50 border-yellow-200' : color === 'green' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200';
+                              const badgeColor = color === 'red' ? 'bg-red-200 text-red-800' : color === 'yellow' ? 'bg-yellow-200 text-yellow-800' : color === 'green' ? 'bg-green-200 text-green-800' : 'bg-gray-200 text-gray-600';
+
+                              return (
+                                <div key={med.id} className={`p-3 sm:p-4 rounded-xl border-2 ${bgColor}`}>
+                                  <div className="flex justify-between items-center mb-3">
+                                    <div>
+                                      <span className="font-semibold text-base">{med.icon} {med.name}</span>
+                                      <span className="text-xs text-gray-500 ml-2">({med.interval}d)</span>
+                                    </div>
+                                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${badgeColor}`}>
+                                      {days === -999 ? 'Never given' : days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today!' : `${days}d left`}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                                    <div className="flex items-center gap-2 flex-1">
+                                      <span className="text-sm text-gray-600">Last given:</span>
+                                      <input
+                                        type="date"
+                                        value={dog[med.id]?.lastGiven || ''}
+                                        onChange={e => updateMedicationDate(dog.id, med.id, e.target.value)}
+                                        className="flex-1 text-sm border rounded-lg px-3 py-2 bg-white"
+                                      />
+                                    </div>
+                                    <button
+                                      onClick={() => giveMedication(dog.id, med.id)}
+                                      className="w-full sm:w-auto px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
+                                    >
+                                      ✓ Give Today
+                                    </button>
+                                  </div>
+                                  {dog[med.id]?.givenBy && (
+                                    <p className="text-xs text-gray-400 mt-2">by {dog[med.id].givenBy}</p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'bills' && (
+                <div className="space-y-4">
+                  {/* Company Info - Collapsible on mobile */}
+                  <details className="bg-gray-50 rounded-xl">
+                    <summary className="p-3 font-semibold cursor-pointer">🏢 Company Info</summary>
+                    <div className="p-3 pt-0 space-y-2">
+                      <input placeholder="Company Name" value={companyInfo.name} onChange={e => setCompanyInfo({...companyInfo, name: e.target.value})} className="w-full p-3 border rounded-lg text-sm" />
+                      <input placeholder="Address" value={companyInfo.address} onChange={e => setCompanyInfo({...companyInfo, address: e.target.value})} className="w-full p-3 border rounded-lg text-sm" />
+                      <input placeholder="Email" value={companyInfo.email} onChange={e => setCompanyInfo({...companyInfo, email: e.target.value})} className="w-full p-3 border rounded-lg text-sm" />
+                    </div>
+                  </details>
+
+                  <div className="flex justify-between items-center flex-wrap gap-2">
+                    <h3 className="font-semibold">📄 Bills</h3>
+                    <div className="flex gap-2 flex-wrap">
+                      <button onClick={() => { if (!userName) { setShowNamePrompt(true); return; } setShowScanner(true); }} className="px-3 py-2 bg-purple-600 text-white rounded-lg text-sm">📷 Scan</button>
+                      <button onClick={() => {
+                        const unpaid = bills.filter(b => !b.paid);
+                        if (!unpaid.length) { alert('No unpaid bills!'); return; }
+                        generateCashAdvanceForm(unpaid.map(b => ({description: b.description, amount: parseFloat(b.amount) || 0})));
+                      }} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm">📋 Cash Advance</button>
+                      <button onClick={generateInvoice} className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm">📄 Invoice</button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {bills.map(b => (
+                      <div key={b.id} className={`p-3 rounded-xl border ${b.paid ? 'bg-gray-50' : 'bg-white'}`}>
+                        <div className="flex items-start gap-3">
+                          <button onClick={() => toggleBillPaid(b.id)} className={`w-7 h-7 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-1 ${b.paid ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>
+                            {b.paid && '✓'}
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <input
+                              value={b.description}
+                              placeholder="Description"
+                              onChange={e => updateBill(b.id, 'description', e.target.value)}
+                              className={`w-full bg-transparent outline-none text-base mb-2 ${b.paid ? 'line-through text-gray-400' : ''}`}
+                            />
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-400">฿</span>
+                                <input
+                                  type="number"
+                                  value={b.amount}
+                                  placeholder="0"
+                                  onChange={e => updateBill(b.id, 'amount', e.target.value)}
+                                  className={`w-24 bg-transparent outline-none font-medium ${b.paid ? 'line-through text-gray-400' : ''}`}
+                                />
+                              </div>
+                              <input
+                                type="date"
+                                value={b.dueDate}
+                                onChange={e => updateBill(b.id, 'dueDate', e.target.value)}
+                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            {getInvoiceImage(b) && (
+                              <button onClick={() => setViewingInvoiceImage(getInvoiceImage(b))} className="text-blue-500 p-2 hover:bg-blue-50 rounded" title="View Invoice">🖼️</button>
+                            )}
+                            <button onClick={() => removeBill(b.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={addBill} className="w-full py-4 border-2 border-dashed rounded-xl text-gray-400 text-sm">+ Add Bill</button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'donations' && (
+                <div className="space-y-4">
+                  <div className="bg-pink-50 rounded-xl p-3 text-sm text-pink-800">
+                    💝 Donations toward Mootoo's vet costs. Each entry syncs to the spreadsheet automatically.
+                  </div>
+
+                  <div className="bg-rose-50 rounded-xl p-3 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <label className="block text-sm font-semibold text-rose-800">🐕 Mootoo Vet Costs</label>
+                      <span className="text-sm font-bold text-rose-700">฿{mootooVetCost.toLocaleString()}</span>
+                    </div>
+                    {vetCosts.map(v => (
+                      <div key={v.id} className="p-2.5 rounded-lg border bg-white">
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <input
+                              value={v.description}
+                              placeholder="What was it for?"
+                              onChange={e => updateVetCost(v.id, 'description', e.target.value)}
+                              className="w-full bg-transparent outline-none text-base mb-2"
+                            />
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-400">฿</span>
+                                <input
+                                  type="number"
+                                  value={v.amount}
+                                  placeholder="0"
+                                  onChange={e => updateVetCost(v.id, 'amount', e.target.value)}
+                                  className="w-24 bg-transparent outline-none font-medium text-rose-600"
+                                />
+                              </div>
+                              <input
+                                type="date"
+                                value={v.date}
+                                onChange={e => updateVetCost(v.id, 'date', e.target.value)}
+                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
+                              />
+                            </div>
+                          </div>
+                          <button onClick={() => removeVetCost(v.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={addVetCost} className="w-full py-3 border-2 border-dashed border-rose-200 rounded-xl text-rose-400 text-sm">+ Add Vet Cost</button>
+                  </div>
+
+                  <div className="flex justify-between items-center flex-wrap gap-2">
+                    <h3 className="font-semibold">💝 Donations</h3>
+                  </div>
+
+                  <div className="space-y-2">
+                    {donations.slice().reverse().map(d => (
+                      <div key={d.id} className="p-3 rounded-xl border bg-white">
+                        <div className="flex items-start gap-3">
+                          <div className="w-7 h-7 rounded-full bg-pink-100 flex items-center justify-center flex-shrink-0 mt-1">💝</div>
+                          <div className="flex-1 min-w-0">
+                            <input
+                              value={d.donor}
+                              placeholder="Donor name"
+                              onChange={e => updateDonation(d.id, 'donor', e.target.value)}
+                              className="w-full bg-transparent outline-none text-base mb-2"
+                            />
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-400">฿</span>
+                                <input
+                                  type="number"
+                                  value={d.amount}
+                                  placeholder="0"
+                                  onChange={e => updateDonation(d.id, 'amount', e.target.value)}
+                                  className="w-24 bg-transparent outline-none font-medium text-green-600"
+                                />
+                              </div>
+                              <input
+                                type="date"
+                                value={d.date}
+                                onChange={e => updateDonation(d.id, 'date', e.target.value)}
+                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
+                              />
+                            </div>
+                          </div>
+                          <button onClick={() => removeDonation(d.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={addDonation} className="w-full py-4 border-2 border-dashed rounded-xl text-gray-400 text-sm">+ Add Donation</button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'activity' && (
+                <div>
+                  <h3 className="font-semibold mb-3">📋 Activity</h3>
+                  {activityLog.length === 0 ? <p className="text-center py-8 text-gray-500">No activity</p> : (
+                    <div className="space-y-2">
+                      {[...activityLog].reverse().slice(0, 20).map((log, i) => (
+                        <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+                          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm flex-shrink-0">{log.user?.[0]?.toUpperCase()}</div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm truncate"><b>{log.user}</b> {log.action} {log.details}</p>
+                            <p className="text-xs text-gray-400">{new Date(log.time).toLocaleString('th-TH')}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'copter' && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h3 className="font-semibold">🐕 Copter - Historical Expenses</h3>
+                    <span className="text-xs text-gray-400">Read-only</span>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-sm text-amber-700">
+                    🕊️ In memory of Copter. These records are preserved from the original expense tracking sheet.
+                  </div>
+
+                  {copterLoading ? (
+                    <div className="text-center py-8">
+                      <div className="text-4xl pulse mb-4">🐾</div>
+                      <p className="text-gray-500">Loading Copter's records...</p>
+                    </div>
+                  ) : copterData.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <p>No data loaded yet.</p>
+                      <button onClick={loadCopterData} className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
+                        Load from Sheet
+                      </button>
+                    </div>
+                  ) : (() => {
+                    const dateRows = copterData.filter(r => r.Date && r.Date !== 'TOTAL' && !r.Date.startsWith('Double') && !r.Date.startsWith('Account') && !r.Date.startsWith('Cashbox') && !r.Date.startsWith('Total Funds'));
+                    const totalRow = copterData.find(r => r.Date === 'TOTAL');
+                    const accountBalance = copterData.find(r => r.Date === 'Account Balance');
+                    const cashbox = copterData.find(r => r.Date === 'Cashbox');
+                    const totalFunds = copterData.find(r => r.Date === 'Total Funds');
+                    return (
+                      <div className="space-y-4">
+                        {/* Summary Cards */}
+                        {totalRow && (
+                          <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl p-4">
+                            <h4 className="font-semibold mb-3 text-center">Copter Expense Summary</h4>
+                            <div className="grid grid-cols-3 text-center gap-2">
+                              <div>
+                                <div className="text-lg sm:text-xl font-bold">฿{Number(totalRow.Cost || 0).toLocaleString()}</div>
+                                <div className="text-xs opacity-80">Total Cost</div>
+                              </div>
+                              <div>
+                                <div className="text-lg sm:text-xl font-bold">฿{Number(totalRow.Donation || 0).toLocaleString()}</div>
+                                <div className="text-xs opacity-80">Total Donation</div>
+                              </div>
+                              <div>
+                                <div className="text-lg sm:text-xl font-bold">฿{Number(totalFunds?.Cost || 0).toLocaleString()}</div>
+                                <div className="text-xs opacity-80">Total Funds</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Account info */}
+                        {(accountBalance || cashbox) && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                            <h4 className="font-semibold text-blue-800 text-sm mb-2">Double for Copter Account</h4>
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                              {accountBalance && <div className="flex justify-between"><span className="text-blue-600">Account Balance</span><span className="font-medium">฿{Number(accountBalance.Cost || 0).toLocaleString()}</span></div>}
+                              {cashbox && <div className="flex justify-between"><span className="text-blue-600">Cashbox</span><span className="font-medium">฿{Number(cashbox.Cost || 0).toLocaleString()}</span></div>}
+                              {totalFunds && <div className="flex justify-between col-span-2 border-t pt-1 mt-1"><span className="text-blue-800 font-semibold">Total Funds</span><span className="font-bold text-blue-800">฿{Number(totalFunds.Cost || 0).toLocaleString()}</span></div>}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Date-by-date records */}
+                        <div className="border rounded-xl overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="bg-gray-100 text-left">
+                                  <th className="px-3 py-2 text-xs font-medium text-gray-600">Date</th>
+                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 text-right">Cost</th>
+                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 text-right">Donation</th>
+                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 text-right">Balance</th>
+                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 hidden sm:table-cell">Notes</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dateRows.map((row, i) => (
+                                  <tr key={i} className={`border-t ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                                    <td className="px-3 py-2 whitespace-nowrap">{row.Date}</td>
+                                    <td className="px-3 py-2 text-right font-medium">{row.Cost ? `฿${Number(row.Cost).toLocaleString()}` : '-'}</td>
+                                    <td className="px-3 py-2 text-right text-green-600">{row.Donation ? `฿${Number(row.Donation).toLocaleString()}` : '-'}</td>
+                                    <td className="px-3 py-2 text-right">{row.Balance ? `฿${Number(row.Balance).toLocaleString()}` : '-'}</td>
+                                    <td className="px-3 py-2 text-xs text-gray-500 hidden sm:table-cell">{row.Notes || ''}</td>
+                                  </tr>
+                                ))}
+                                {totalRow && (
+                                  <tr className="border-t-2 border-gray-300 bg-gray-100 font-bold">
+                                    <td className="px-3 py-2">TOTAL</td>
+                                    <td className="px-3 py-2 text-right">฿{Number(totalRow.Cost || 0).toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right text-green-700">฿{Number(totalRow.Donation || 0).toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right" colSpan="2"></td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Donation breakdown */}
+                        {totalRow && (
+                          <div className="bg-green-50 border border-green-200 rounded-xl p-3">
+                            <h4 className="font-semibold text-green-800 text-sm mb-2">Donation Breakdown</h4>
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                              <div className="flex justify-between"><span className="text-green-600">Promptpay</span><span className="font-medium">฿{Number(totalRow.Promptpay || 0).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span className="text-green-600">Donation Box</span><span className="font-medium">฿{Number(totalRow['Donation Box'] || 0).toLocaleString()}</span></div>
+                            </div>
+                          </div>
+                        )}
+
+                        <a href={`${GSHEET_CONFIG.editUrl}?gid=${GSHEET_CONFIG.copterSummaryGid}`} target="_blank" className="block text-center text-sm text-blue-600 hover:underline py-2">
+                          📝 View full sheet in Google Sheets
+                        </a>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* Summary */}
+            {activeTab === 'bills' && (
+              <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-2xl p-4">
+                <div className="grid grid-cols-3 text-center gap-2">
+                  <div>
+                    <div className="text-xl sm:text-2xl font-bold">{bills.length}</div>
+                    <div className="text-xs opacity-80">Total</div>
+                  </div>
+                  <div>
+                    <div className="text-xl sm:text-2xl font-bold">฿{unpaidTotal.toLocaleString()}</div>
+                    <div className="text-xs opacity-80">Unpaid</div>
+                  </div>
+                  <div>
+                    <div className="text-xl sm:text-2xl font-bold">฿{paidTotal.toLocaleString()}</div>
+                    <div className="text-xs opacity-80">Paid</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Modals */}
+          {showNamePrompt && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl p-5 w-full max-w-sm">
+                <h3 className="font-bold text-lg mb-4">👋 What's your name?</h3>
+                <input placeholder="Enter name" className="w-full p-4 border rounded-xl mb-4 text-base" autoFocus onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) { setUserName(e.target.value.trim()); setShowNamePrompt(false); }}} />
+                <button onClick={e => { const input = e.target.previousElementSibling; if (input.value.trim()) { setUserName(input.value.trim()); setShowNamePrompt(false); }}} className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium">Save</button>
+              </div>
+            </div>
+          )}
+
+          {showScanner && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3">
+              <div className="bg-white rounded-2xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-lg">📷 Scan Invoice</h3>
+                  <button onClick={() => { setShowScanner(false); setScannedItems([]); setScanPreview(null); }} className="text-2xl p-2">&times;</button>
+                </div>
+                {!scanPreview ? (
+                  <label className="block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer">
+                    <div className="text-4xl mb-4">📄</div>
+                    <span className="inline-block px-6 py-3 bg-blue-600 text-white rounded-xl font-medium">Choose Image</span>
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  </label>
+                ) : isScanning ? (
+                  <div className="text-center py-12"><div className="text-5xl pulse mb-4">🔍</div><p>Scanning...</p></div>
+                ) : (
+                  <div className="space-y-4">
+                    <img src={scanPreview} className="w-full max-h-48 object-contain rounded-xl border" />
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-medium">{scannedItems.filter(i => i.selected).length} of {scannedItems.length} selected</span>
+                      <div className="flex gap-2">
+                        <button onClick={selectAllItems} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Select All</button>
+                        <button onClick={unselectAllItems} className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Unselect All</button>
+                      </div>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {scannedItems.map(item => (
+                        <div key={item.id} className={`flex items-center gap-2 p-3 rounded-xl border ${item.selected ? 'bg-green-50 border-green-200' : 'bg-gray-50'}`}>
+                          <button onClick={() => toggleScannedItem(item.id)} className={`w-6 h-6 rounded border-2 flex items-center justify-center flex-shrink-0 ${item.selected ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>{item.selected && '✓'}</button>
+                          <input defaultValue={item.description} onBlur={e => setScannedItems(scannedItems.map(i => i.id === item.id ? {...i, description: e.target.value} : i))} className="flex-1 min-w-0 text-sm bg-transparent border-b border-gray-200 focus:border-blue-500 outline-none py-1" />
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <span className="text-gray-400">฿</span>
+                            <input type="number" defaultValue={item.amount} onBlur={e => setScannedItems(scannedItems.map(i => i.id === item.id ? {...i, amount: parseFloat(e.target.value) || 0} : i))} className="w-20 text-sm text-right bg-transparent border-b border-gray-200 focus:border-blue-500 outline-none py-1" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex justify-between items-center pt-3 border-t">
+                      <span className="text-sm text-gray-600">{scannedItems.filter(i => i.selected).length} items · ฿{scannedItems.filter(i => i.selected).reduce((s, i) => s + i.amount, 0).toLocaleString()}</span>
+                      <button onClick={addScannedItems} className="px-5 py-2.5 bg-green-600 text-white rounded-xl font-medium">Add Bills</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Employee Settings Modal */}
+          {showEmployeeSettings && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
+                <h3 className="font-bold text-lg mb-4">Employee Information</h3>
+                <p className="text-gray-600 text-sm mb-4">This info will be used for Cash Advance Forms.</p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Name</label>
+                    <input type="text" value={employeeInfo.name} onChange={e => setEmployeeInfo({...employeeInfo, name: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Your name" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Position</label>
+                    <input type="text" value={employeeInfo.position} onChange={e => setEmployeeInfo({...employeeInfo, position: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Frontend Developer" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Team</label>
+                    <input type="text" value={employeeInfo.team} onChange={e => setEmployeeInfo({...employeeInfo, team: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Frontend" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Department</label>
+                    <input type="text" value={employeeInfo.department} onChange={e => setEmployeeInfo({...employeeInfo, department: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Engineering" />
+                  </div>
+                  <div className="border-t pt-3 mt-3">
+                    <p className="text-sm font-medium text-gray-700 mb-2">Bank Details (for Transfer)</p>
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Bank Name</label>
+                    <input type="text" value={employeeInfo.bankName} onChange={e => setEmployeeInfo({...employeeInfo, bankName: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Kasikorn Bank" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Account Name</label>
+                    <input type="text" value={employeeInfo.accountName} onChange={e => setEmployeeInfo({...employeeInfo, accountName: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Account holder name" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Account No</label>
+                    <input type="text" value={employeeInfo.accountNo} onChange={e => setEmployeeInfo({...employeeInfo, accountNo: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Bank account number" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-gray-600 block mb-1">Promptpay</label>
+                    <input type="text" value={employeeInfo.promptpay} onChange={e => setEmployeeInfo({...employeeInfo, promptpay: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Promptpay number" />
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-6">
+                  <button onClick={() => setShowEmployeeSettings(false)} className="flex-1 py-3 bg-gray-100 rounded-xl">Cancel</button>
+                  <button onClick={() => {
+                    setShowEmployeeSettings(false);
+                    if (pendingCashAdvanceItems.length > 0) {
+                      generateCashAdvanceForm(pendingCashAdvanceItems.filter(i => i.selected !== false));
+                      setPendingCashAdvanceItems([]);
+                      setShowCashAdvancePrompt(false);
+                    }
+                  }} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-medium">Save</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Cash Advance Prompt Modal */}
+          {showCashAdvancePrompt && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div className="text-center mb-4">
+                  <div className="text-4xl mb-2">📄</div>
+                  <h3 className="font-bold text-lg">Generate Cash Advance Form?</h3>
+                </div>
+                <p className="text-gray-600 text-sm text-center mb-3">Bills added! Select items for Cash Advance Form:</p>
+                <div className="mb-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-sm font-medium">{pendingCashAdvanceItems.filter(i => i.selected !== false).length} of {pendingCashAdvanceItems.length} selected</span>
+                    <div className="flex gap-2">
+                      <button onClick={selectAllCashAdvanceItems} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Select All</button>
+                      <button onClick={unselectAllCashAdvanceItems} className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Unselect All</button>
+                    </div>
+                  </div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-2">
+                    {pendingCashAdvanceItems.map(item => (
+                      <div key={item.id} className={`flex items-center gap-2 p-2 rounded-lg ${item.selected !== false ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+                        <button onClick={() => toggleCashAdvanceItem(item.id)} className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${item.selected !== false ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>{item.selected !== false && '✓'}</button>
+                        <span className="flex-1 text-sm truncate">{item.description || 'Item'}</span>
+                        <span className="text-sm font-medium">฿{parseFloat(item.amount).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-right mt-2 font-semibold">
+                    Total: ฿{pendingCashAdvanceItems.filter(i => i.selected !== false).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => handleCashAdvanceResponse(false)} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">No, just bills</button>
+                  <button onClick={() => handleCashAdvanceResponse(true)} disabled={!pendingCashAdvanceItems.some(i => i.selected !== false)} className="flex-1 py-3 bg-green-600 text-white rounded-xl font-medium disabled:opacity-50">
+                    Generate Excel ({pendingCashAdvanceItems.filter(i => i.selected !== false).length})
+                  </button>
+                </div>
+                <button onClick={() => setShowEmployeeSettings(true)} className="w-full mt-3 text-sm text-blue-600 hover:underline">Edit employee info</button>
+              </div>
+            </div>
+          )}
+
+          {/* Invoice Image Viewer Modal */}
+          {viewingInvoiceImage && (
+            <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setViewingInvoiceImage(null)}>
+              <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setViewingInvoiceImage(null)}
+                  className="absolute -top-3 -right-3 w-10 h-10 bg-white rounded-full shadow-lg flex items-center justify-center text-xl z-10"
+                >
+                  ×
+                </button>
+                <img
+                  src={viewingInvoiceImage}
+                  alt="Invoice"
+                  className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

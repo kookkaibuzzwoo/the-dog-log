@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Office Dogs - Medication & Bill Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const MEDICATIONS = {
+      nexgard: { name: 'Nexgard', intervalDays: 30, color: 'blue' },
+      drontal: { name: 'Drontal', intervalDays: 90, color: 'purple' }
+    };
+
+    // Simple icon components
+    const Icon = ({ children, className = "" }) => (
+      <span className={`inline-flex items-center justify-center ${className}`}>{children}</span>
+    );
+
+    function DogMedicationTracker() {
+      // Load from localStorage on init
+      const loadData = (key, defaultValue) => {
+        try {
+          const saved = localStorage.getItem(key);
+          return saved ? JSON.parse(saved) : defaultValue;
+        } catch { return defaultValue; }
+      };
+
+      const [dogs, setDogs] = useState(() => loadData('dogTracker_dogs', [
+        { id: 1, name: 'Sample Dog (delete me)', nexgardLast: '2026-01-15', drontalLast: '2025-12-01' }
+      ]));
+      const [bills, setBills] = useState(() => loadData('dogTracker_bills', []));
+      const [companyInfo, setCompanyInfo] = useState(() => loadData('dogTracker_company', {
+        name: '', address: '', email: ''
+      }));
+
+      const [showAddDog, setShowAddDog] = useState(false);
+      const [showAddBill, setShowAddBill] = useState(false);
+      const [editingDog, setEditingDog] = useState(null);
+      const [newDog, setNewDog] = useState({ name: '', nexgardLast: '', drontalLast: '' });
+      const [newBill, setNewBill] = useState({ description: '', amount: '', dueDate: '' });
+      const [activeTab, setActiveTab] = useState('medications');
+
+      // Auto-save to localStorage
+      useEffect(() => {
+        localStorage.setItem('dogTracker_dogs', JSON.stringify(dogs));
+      }, [dogs]);
+      useEffect(() => {
+        localStorage.setItem('dogTracker_bills', JSON.stringify(bills));
+      }, [bills]);
+      useEffect(() => {
+        localStorage.setItem('dogTracker_company', JSON.stringify(companyInfo));
+      }, [companyInfo]);
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const getDaysUntilDue = (lastDate, intervalDays) => {
+        if (!lastDate) return null;
+        const last = new Date(lastDate);
+        const nextDue = new Date(last);
+        nextDue.setDate(nextDue.getDate() + intervalDays);
+        const diffTime = nextDue - today;
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      };
+
+      const getNextDueDate = (lastDate, intervalDays) => {
+        if (!lastDate) return null;
+        const last = new Date(lastDate);
+        const nextDue = new Date(last);
+        nextDue.setDate(nextDue.getDate() + intervalDays);
+        return nextDue.toLocaleDateString();
+      };
+
+      const getStatusColor = (daysUntil) => {
+        if (daysUntil === null) return 'gray';
+        if (daysUntil < 0) return 'red';
+        if (daysUntil <= 7) return 'orange';
+        return 'green';
+      };
+
+      const getStatusText = (daysUntil) => {
+        if (daysUntil === null) return 'Not set';
+        if (daysUntil < 0) return `⚠️ Overdue by ${Math.abs(daysUntil)} days!`;
+        if (daysUntil === 0) return '🔔 Due today!';
+        if (daysUntil === 1) return '⏰ Due tomorrow';
+        if (daysUntil <= 7) return `⏰ Due in ${daysUntil} days`;
+        return `✓ Due in ${daysUntil} days`;
+      };
+
+      const addDog = () => {
+        if (!newDog.name) return;
+        setDogs([...dogs, { ...newDog, id: Date.now() }]);
+        setNewDog({ name: '', nexgardLast: '', drontalLast: '' });
+        setShowAddDog(false);
+      };
+
+      const updateDog = (id, updates) => {
+        setDogs(dogs.map(d => d.id === id ? { ...d, ...updates } : d));
+        setEditingDog(null);
+      };
+
+      const deleteDog = (id) => {
+        if (confirm('Delete this dog?')) {
+          setDogs(dogs.filter(d => d.id !== id));
+        }
+      };
+
+      const markGiven = (dogId, medType) => {
+        const todayStr = today.toISOString().split('T')[0];
+        const field = medType === 'nexgard' ? 'nexgardLast' : 'drontalLast';
+        updateDog(dogId, { [field]: todayStr });
+      };
+
+      const addBill = () => {
+        if (!newBill.description || !newBill.amount) return;
+        setBills([...bills, { ...newBill, id: Date.now(), paid: false }]);
+        setNewBill({ description: '', amount: '', dueDate: '' });
+        setShowAddBill(false);
+      };
+
+      const toggleBillPaid = (id) => {
+        setBills(bills.map(b => b.id === id ? { ...b, paid: !b.paid } : b));
+      };
+
+      const deleteBill = (id) => {
+        if (confirm('Delete this bill?')) {
+          setBills(bills.filter(b => b.id !== id));
+        }
+      };
+
+      const exportData = () => {
+        const data = { dogs, bills, companyInfo, exportDate: new Date().toISOString() };
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `dog-medication-data-${new Date().toISOString().split('T')[0]}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      const importData = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const data = JSON.parse(event.target.result);
+            if (data.dogs) setDogs(data.dogs);
+            if (data.bills) setBills(data.bills);
+            if (data.companyInfo) setCompanyInfo(data.companyInfo);
+            alert('Data imported successfully!');
+          } catch (err) {
+            alert('Invalid file format');
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      };
+
+      const getAlerts = () => {
+        const alerts = [];
+        dogs.forEach(dog => {
+          const nexgardDays = getDaysUntilDue(dog.nexgardLast, MEDICATIONS.nexgard.intervalDays);
+          const drontalDays = getDaysUntilDue(dog.drontalLast, MEDICATIONS.drontal.intervalDays);
+
+          if (nexgardDays !== null && nexgardDays <= 7) {
+            alerts.push({ dog: dog.name, med: 'Nexgard', days: nexgardDays, type: 'medication' });
+          }
+          if (drontalDays !== null && drontalDays <= 7) {
+            alerts.push({ dog: dog.name, med: 'Drontal', days: drontalDays, type: 'medication' });
+          }
+        });
+
+        bills.filter(b => !b.paid).forEach(bill => {
+          const daysUntil = getDaysUntilDue(bill.dueDate, 0);
+          if (daysUntil !== null && daysUntil <= 7) {
+            alerts.push({ description: bill.description, days: daysUntil, type: 'bill', amount: bill.amount });
+          }
+        });
+
+        return alerts.sort((a, b) => a.days - b.days);
+      };
+
+      const generateInvoice = () => {
+        const unpaidBills = bills.filter(b => !b.paid);
+        const total = unpaidBills.reduce((sum, b) => sum + parseFloat(b.amount || 0), 0);
+        const invoiceNum = `INV-${Date.now().toString().slice(-6)}`;
+
+        const invoiceContent = `
+INVOICE
+════════════════════════════════════════
+Invoice #: ${invoiceNum}
+Date: ${new Date().toLocaleDateString()}
+
+FROM:
+  Office Dog Care
+────────────────────────────────────────
+
+BILL TO:
+  ${companyInfo.name || '[Company Name]'}
+  ${companyInfo.address || '[Company Address]'}
+  ${companyInfo.email || '[Company Email]'}
+
+────────────────────────────────────────
+DESCRIPTION                      AMOUNT
+────────────────────────────────────────
+${unpaidBills.map(b =>
+  `${b.description.substring(0, 28).padEnd(30)} $${parseFloat(b.amount).toFixed(2).padStart(8)}`
+).join('\n')}
+────────────────────────────────────────
+TOTAL                           $${total.toFixed(2).padStart(8)}
+════════════════════════════════════════
+
+Payment Terms: Due upon receipt
+
+Thank you for your business!
+        `.trim();
+
+        const blob = new Blob([invoiceContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `invoice-${invoiceNum}-${new Date().toISOString().split('T')[0]}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      const alerts = getAlerts();
+
+      const StatusBadge = ({ daysUntil }) => {
+        const color = getStatusColor(daysUntil);
+        const colorClasses = {
+          red: 'bg-red-100 text-red-800 border-red-300',
+          orange: 'bg-orange-100 text-orange-800 border-orange-300',
+          green: 'bg-green-100 text-green-800 border-green-300',
+          gray: 'bg-gray-100 text-gray-600 border-gray-300'
+        };
+        return (
+          <span className={`px-3 py-1 rounded-full text-xs font-medium border ${colorClasses[color]}`}>
+            {getStatusText(daysUntil)}
+          </span>
+        );
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-4 md:p-8">
+          <div className="max-w-4xl mx-auto">
+            {/* Header */}
+            <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-blue-100 rounded-xl text-3xl">🐕</div>
+                  <div>
+                    <h1 className="text-2xl font-bold text-gray-800">Office Dogs Tracker</h1>
+                    <p className="text-gray-500">Medication & Bill Management</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <label className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg cursor-pointer transition">
+                    <span>📥</span>
+                    <span className="text-sm font-medium">Import</span>
+                    <input type="file" accept=".json" onChange={importData} className="hidden" />
+                  </label>
+                  <button onClick={exportData} className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition">
+                    <span>📤</span>
+                    <span className="text-sm font-medium">Export</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Alerts Section */}
+            {alerts.length > 0 && (
+              <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-2xl p-4 mb-6">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-xl">🔔</span>
+                  <h2 className="font-semibold text-orange-800">Upcoming & Overdue Items</h2>
+                </div>
+                <div className="space-y-2">
+                  {alerts.map((alert, i) => (
+                    <div key={i} className={`flex items-center justify-between p-3 rounded-lg ${alert.days < 0 ? 'bg-red-100' : 'bg-white'}`}>
+                      <div className="flex items-center gap-2">
+                        <span>{alert.type === 'medication' ? '💊' : '📄'}</span>
+                        <span className="font-medium">
+                          {alert.type === 'medication'
+                            ? `${alert.dog} - ${alert.med}`
+                            : `${alert.description} ($${parseFloat(alert.amount).toFixed(2)})`}
+                        </span>
+                      </div>
+                      <StatusBadge daysUntil={alert.days} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tabs */}
+            <div className="flex gap-2 mb-6">
+              <button
+                onClick={() => setActiveTab('medications')}
+                className={`flex items-center gap-2 px-6 py-3 rounded-xl font-medium transition ${
+                  activeTab === 'medications'
+                    ? 'bg-blue-600 text-white shadow-lg'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <span>💊</span>
+                Medications
+              </button>
+              <button
+                onClick={() => setActiveTab('bills')}
+                className={`flex items-center gap-2 px-6 py-3 rounded-xl font-medium transition ${
+                  activeTab === 'bills'
+                    ? 'bg-purple-600 text-white shadow-lg'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <span>📄</span>
+                Bills
+              </button>
+            </div>
+
+            {/* Medications Tab */}
+            {activeTab === 'medications' && (
+              <div className="space-y-4">
+                {dogs.length === 0 && (
+                  <div className="bg-white rounded-2xl shadow-lg p-8 text-center text-gray-500">
+                    <p className="text-4xl mb-2">🐕</p>
+                    <p>No dogs added yet. Add your first dog below!</p>
+                  </div>
+                )}
+
+                {dogs.map(dog => (
+                  <div key={dog.id} className="bg-white rounded-2xl shadow-lg p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 bg-amber-100 rounded-lg text-2xl">🐕</div>
+                        {editingDog === dog.id ? (
+                          <input
+                            type="text"
+                            value={dog.name}
+                            onChange={(e) => setDogs(dogs.map(d => d.id === dog.id ? {...d, name: e.target.value} : d))}
+                            className="text-xl font-bold border-b-2 border-blue-500 focus:outline-none px-1"
+                          />
+                        ) : (
+                          <h3 className="text-xl font-bold text-gray-800">{dog.name}</h3>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        {editingDog === dog.id ? (
+                          <>
+                            <button onClick={() => setEditingDog(null)} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Save">
+                              ✓
+                            </button>
+                            <button onClick={() => setEditingDog(null)} className="p-2 text-gray-400 hover:bg-gray-50 rounded-lg" title="Cancel">
+                              ✕
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button onClick={() => setEditingDog(dog.id)} className="p-2 text-gray-400 hover:bg-gray-50 rounded-lg" title="Edit">
+                              ✏️
+                            </button>
+                            <button onClick={() => deleteDog(dog.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg" title="Delete">
+                              🗑️
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {/* Nexgard Card */}
+                      <div className="border-2 border-blue-100 rounded-xl p-4 bg-blue-50/50">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-semibold text-blue-800">💊 Nexgard</span>
+                          <span className="text-sm text-blue-600 bg-blue-100 px-2 py-1 rounded">Monthly</span>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-gray-600">Last given:</span>
+                            {editingDog === dog.id ? (
+                              <input
+                                type="date"
+                                value={dog.nexgardLast || ''}
+                                onChange={(e) => setDogs(dogs.map(d => d.id === dog.id ? {...d, nexgardLast: e.target.value} : d))}
+                                className="border rounded px-2 py-1"
+                              />
+                            ) : (
+                              <span className="font-medium">{dog.nexgardLast || 'Not set'}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-gray-600">Next due:</span>
+                            <span className="font-medium">{getNextDueDate(dog.nexgardLast, 30) || 'Not set'}</span>
+                          </div>
+                          <div>
+                            <StatusBadge daysUntil={getDaysUntilDue(dog.nexgardLast, MEDICATIONS.nexgard.intervalDays)} />
+                          </div>
+                          <button
+                            onClick={() => markGiven(dog.id, 'nexgard')}
+                            className="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm font-medium"
+                          >
+                            ✓ Mark as Given Today
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Drontal Card */}
+                      <div className="border-2 border-purple-100 rounded-xl p-4 bg-purple-50/50">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="font-semibold text-purple-800">💊 Drontal</span>
+                          <span className="text-sm text-purple-600 bg-purple-100 px-2 py-1 rounded">Every 3 months</span>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-gray-600">Last given:</span>
+                            {editingDog === dog.id ? (
+                              <input
+                                type="date"
+                                value={dog.drontalLast || ''}
+                                onChange={(e) => setDogs(dogs.map(d => d.id === dog.id ? {...d, drontalLast: e.target.value} : d))}
+                                className="border rounded px-2 py-1"
+                              />
+                            ) : (
+                              <span className="font-medium">{dog.drontalLast || 'Not set'}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-gray-600">Next due:</span>
+                            <span className="font-medium">{getNextDueDate(dog.drontalLast, 90) || 'Not set'}</span>
+                          </div>
+                          <div>
+                            <StatusBadge daysUntil={getDaysUntilDue(dog.drontalLast, MEDICATIONS.drontal.intervalDays)} />
+                          </div>
+                          <button
+                            onClick={() => markGiven(dog.id, 'drontal')}
+                            className="w-full py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition text-sm font-medium"
+                          >
+                            ✓ Mark as Given Today
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Add Dog Form */}
+                {showAddDog ? (
+                  <div className="bg-white rounded-2xl shadow-lg p-6">
+                    <h3 className="font-semibold mb-4 flex items-center gap-2">
+                      <span>🐕</span> Add New Dog
+                    </h3>
+                    <div className="space-y-4">
+                      <input
+                        type="text"
+                        placeholder="Dog's name"
+                        value={newDog.name}
+                        onChange={(e) => setNewDog({...newDog, name: e.target.value})}
+                        className="w-full px-4 py-3 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none"
+                        autoFocus
+                      />
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-sm text-gray-600 mb-1 block">Last Nexgard (optional)</label>
+                          <input
+                            type="date"
+                            value={newDog.nexgardLast}
+                            onChange={(e) => setNewDog({...newDog, nexgardLast: e.target.value})}
+                            className="w-full px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm text-gray-600 mb-1 block">Last Drontal (optional)</label>
+                          <input
+                            type="date"
+                            value={newDog.drontalLast}
+                            onChange={(e) => setNewDog({...newDog, drontalLast: e.target.value})}
+                            className="w-full px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={addDog} className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                          Add Dog
+                        </button>
+                        <button onClick={() => {setShowAddDog(false); setNewDog({ name: '', nexgardLast: '', drontalLast: '' });}} className="px-6 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowAddDog(true)}
+                    className="w-full p-4 border-2 border-dashed border-gray-300 rounded-2xl text-gray-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/50 transition flex items-center justify-center gap-2 font-medium"
+                  >
+                    <span className="text-xl">+</span>
+                    Add New Dog
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Bills Tab */}
+            {activeTab === 'bills' && (
+              <div className="space-y-4">
+                {/* Company Info */}
+                <div className="bg-white rounded-2xl shadow-lg p-6">
+                  <div className="flex items-center gap-2 mb-4">
+                    <span>🏢</span>
+                    <h3 className="font-semibold">Company Information (for invoices)</h3>
+                  </div>
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <input
+                      type="text"
+                      placeholder="Company Name"
+                      value={companyInfo.name}
+                      onChange={(e) => setCompanyInfo({...companyInfo, name: e.target.value})}
+                      className="px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Address"
+                      value={companyInfo.address}
+                      onChange={(e) => setCompanyInfo({...companyInfo, address: e.target.value})}
+                      className="px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none"
+                    />
+                    <input
+                      type="email"
+                      placeholder="Email"
+                      value={companyInfo.email}
+                      onChange={(e) => setCompanyInfo({...companyInfo, email: e.target.value})}
+                      className="px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Bills List */}
+                <div className="bg-white rounded-2xl shadow-lg p-6">
+                  <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <span>📄</span> Bills to Pay
+                    </h3>
+                    <button
+                      onClick={generateInvoice}
+                      disabled={bills.filter(b => !b.paid).length === 0}
+                      className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                    >
+                      📄 Generate Invoice
+                    </button>
+                  </div>
+
+                  {bills.length === 0 ? (
+                    <p className="text-gray-500 text-center py-8">No bills added yet. Add medication expenses to track!</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {bills.map(bill => (
+                        <div key={bill.id} className={`flex items-center justify-between p-4 rounded-xl border-2 transition ${bill.paid ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => toggleBillPaid(bill.id)}
+                              className={`w-7 h-7 rounded-full border-2 flex items-center justify-center transition ${bill.paid ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 hover:border-green-400'}`}
+                            >
+                              {bill.paid && '✓'}
+                            </button>
+                            <div>
+                              <p className={`font-medium ${bill.paid ? 'line-through text-gray-400' : ''}`}>{bill.description}</p>
+                              <p className="text-sm text-gray-500">Due: {bill.dueDate || 'Not set'}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className={`font-bold text-lg ${bill.paid ? 'text-gray-400' : ''}`}>${parseFloat(bill.amount).toFixed(2)}</span>
+                            {!bill.paid && <StatusBadge daysUntil={getDaysUntilDue(bill.dueDate, 0)} />}
+                            <button onClick={() => deleteBill(bill.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-lg">
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Add Bill Form */}
+                  {showAddBill ? (
+                    <div className="mt-4 p-4 bg-gray-50 rounded-xl border-2 border-gray-200">
+                      <h4 className="font-medium mb-3">Add New Bill</h4>
+                      <div className="grid md:grid-cols-3 gap-4 mb-4">
+                        <input
+                          type="text"
+                          placeholder="Description (e.g., Nexgard x3)"
+                          value={newBill.description}
+                          onChange={(e) => setNewBill({...newBill, description: e.target.value})}
+                          className="px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none"
+                          autoFocus
+                        />
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="Amount"
+                          value={newBill.amount}
+                          onChange={(e) => setNewBill({...newBill, amount: e.target.value})}
+                          className="px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none"
+                        />
+                        <input
+                          type="date"
+                          value={newBill.dueDate}
+                          onChange={(e) => setNewBill({...newBill, dueDate: e.target.value})}
+                          className="px-4 py-2 border-2 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={addBill} className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition font-medium">
+                          Add Bill
+                        </button>
+                        <button onClick={() => {setShowAddBill(false); setNewBill({ description: '', amount: '', dueDate: '' });}} className="px-6 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowAddBill(true)}
+                      className="w-full mt-4 p-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 hover:border-purple-400 hover:text-purple-600 hover:bg-purple-50/50 transition flex items-center justify-center gap-2 font-medium"
+                    >
+                      <span className="text-xl">+</span>
+                      Add New Bill
+                    </button>
+                  )}
+                </div>
+
+                {/* Summary */}
+                {bills.length > 0 && (
+                  <div className="bg-gradient-to-r from-purple-500 to-blue-500 rounded-2xl p-6 text-white">
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-3xl font-bold">{bills.length}</p>
+                        <p className="text-purple-100">Total Bills</p>
+                      </div>
+                      <div>
+                        <p className="text-3xl font-bold">${bills.filter(b => !b.paid).reduce((sum, b) => sum + parseFloat(b.amount || 0), 0).toFixed(2)}</p>
+                        <p className="text-purple-100">Unpaid</p>
+                      </div>
+                      <div>
+                        <p className="text-3xl font-bold">${bills.filter(b => b.paid).reduce((sum, b) => sum + parseFloat(b.amount || 0), 0).toFixed(2)}</p>
+                        <p className="text-purple-100">Paid</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="text-center mt-8 text-gray-400 text-sm space-y-1">
+              <p>💾 Data is automatically saved in your browser</p>
+              <p>💡 Use Export to backup your data or transfer to another device</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<DogMedicationTracker />, document.getElementById('root'));
+  </script>
+</body>
+</html>

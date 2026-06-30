@@ -1,0 +1,10 @@
+.DS_Store
+dist/
+.netlify/
+node_modules/
+*.log
+
+# Variant HTML files with embedded Firebase/Google credentials — kept local only
+dog-log-firebase.html
+dog-tracker-team.html
+the-dog-log.html
