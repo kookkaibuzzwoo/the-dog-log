@@ -89,6 +89,9 @@
       const saveTimeoutRef = useRef(null);
       const syncTimeoutRef = useRef(null);
       const isLoadingRef = useRef(false);
+      // Guard: never PUSH to the sheet until we've successfully PULLED from it once.
+      // Prevents a device with stale local data from overwriting the sheet on load.
+      const hasSyncedRef = useRef(false);
       const today = new Date();
 
       // CSV Parser for Google Sheets published data
@@ -161,6 +164,7 @@
           const hasSheetData = (data.dogs && data.dogs.length > 0) || (data.bills && data.bills.length > 0) || (data.medications && data.medications.length > 0);
           if (!hasSheetData) {
             console.log('Sheet is empty, keeping local data');
+            hasSyncedRef.current = true; // pulled successfully (sheet just happens to be empty)
             setSyncStatus('synced');
             setErrorMessage('');
             return;
@@ -181,6 +185,7 @@
           if (data.companyInfo && (data.companyInfo.name || data.companyInfo.mootooVetCost)) setCompanyInfo(data.companyInfo);
           if (data.activityLog && data.activityLog.length > 0) setActivityLog(data.activityLog);
 
+          hasSyncedRef.current = true; // pulled real data successfully — pushes are now allowed
           setLastSync(new Date());
           setSyncStatus('synced');
           setErrorMessage('');
@@ -347,7 +352,8 @@
         if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = setTimeout(() => {
           localStorage.setItem('dogLog_backup', JSON.stringify({ dogs, bills, donations, vetCosts, medications, companyInfo, activityLog }));
-          if (appsScriptUrl) saveToSheets();
+          // Only push to the sheet once we've confirmed its contents via an initial pull.
+          if (appsScriptUrl && hasSyncedRef.current) saveToSheets();
         }, 1000);
       }, [dogs, bills, donations, vetCosts, medications, companyInfo, activityLog]);
 
