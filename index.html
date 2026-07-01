@@ -92,6 +92,10 @@
       // Guard: never PUSH to the sheet until we've successfully PULLED from it once.
       // Prevents a device with stale local data from overwriting the sheet on load.
       const hasSyncedRef = useRef(false);
+      // Baseline record counts from the last confirmed-good sheet state, used to
+      // block a catastrophic write that would wipe most of the data.
+      const lastGoodCountsRef = useRef(null);
+      const recordCounts = (o) => (o.dogs ? o.dogs.length : 0) + (o.bills ? o.bills.length : 0) + (o.donations ? o.donations.length : 0) + (o.vetCosts ? o.vetCosts.length : 0);
       const today = new Date();
 
       // CSV Parser for Google Sheets published data
@@ -186,6 +190,7 @@
           if (data.activityLog && data.activityLog.length > 0) setActivityLog(data.activityLog);
 
           hasSyncedRef.current = true; // pulled real data successfully — pushes are now allowed
+          lastGoodCountsRef.current = recordCounts(data); // baseline for the destructive-write guard
           setLastSync(new Date());
           setSyncStatus('synced');
           setErrorMessage('');
@@ -201,13 +206,24 @@
       // Sync TO Google Sheets (via Apps Script)
       const saveToSheets = async () => {
         if (!appsScriptUrl || isLoadingRef.current) return;
+        const payload = { dogs, bills, donations, vetCosts, medications, companyInfo, activityLog };
+        // Defense-in-depth: refuse to overwrite the sheet with a drastically smaller
+        // dataset (the signature of the corruption that wiped everything).
+        const prevCount = lastGoodCountsRef.current;
+        const nextCount = recordCounts(payload);
+        if (prevCount !== null && prevCount >= 8 && nextCount < prevCount * 0.5) {
+          console.warn('saveToSheets: blocked a destructive write', { prevCount, nextCount });
+          setSyncStatus('error');
+          setErrorMessage('Sync paused — refused to replace sheet data (' + prevCount + ' records) with a much smaller set (' + nextCount + '). Reload to re-sync from the sheet.');
+          return;
+        }
         try {
-          const payload = { dogs, bills, donations, vetCosts, medications, companyInfo, activityLog };
           await fetch(appsScriptUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
             body: JSON.stringify(payload)
           });
+          lastGoodCountsRef.current = nextCount;
           setLastSync(new Date());
           setSyncStatus('synced');
           localStorage.setItem('dogLog_backup', JSON.stringify(payload));
@@ -269,62 +285,24 @@
       };
 
       // One-time migration: seed data from old Firebase backup
-      const FIREBASE_SEED_DATA = {
-        dogs: [
-          { id: 1770016201683, name: "Chok", "annual_vaccines_(rabies,_dhpp)__1770016941789": { givenBy: "kk", lastGiven: "2025-03-06" }, drontal: { givenBy: "kk", lastGiven: "2025-12-23" }, nexgard: { givenBy: "kk", lastGiven: "2026-02-05" } },
-          { id: 1770017118528, name: "Mootoo", "annual_vaccines_(rabies,_dhpp)__1770016941789": { givenBy: "kk", lastGiven: "2025-03-06" }, drontal: { givenBy: "kk", lastGiven: "2025-12-23" }, nexgard: { givenBy: "kk", lastGiven: "2026-02-05" } }
-        ],
-        medications: [
-          { icon: "💊", id: "nexgard", interval: 30, name: "Nexgard" },
-          { icon: "💊", id: "drontal", interval: 90, name: "Drontal" },
-          { icon: "💉", id: "annual_vaccines_(rabies,_dhpp)__1770016941789", interval: 365, name: "Annual Vaccines (Rabies, DHPP)" }
-        ],
-        bills: [
-          { id: 1770017015544, description: "Nexgard, Drontal and Medical Shampoo", amount: "1809", dueDate: "2025-12-16", paid: false },
-          { id: 1770280898610, batchId: 1770280898610, description: "Hervey (nang) SPT 15-30 Kg 1", amount: "1129", dueDate: "2026-02-05", paid: false }
-        ],
-        companyInfo: { name: "pet-vet-store.com", address: "", email: "" },
-        activityLog: [
-          { action: "gave Nexgard", details: "Chok", time: "2026-02-05T07:35:26.717Z", user: "kk" },
-          { action: "gave Nexgard", details: "Mootoo", time: "2026-02-05T07:35:29.628Z", user: "kk" },
-          { action: "scanned", details: "3 bills", time: "2026-02-05T08:32:35.267Z", user: "kk" },
-          { action: "generated cash advance form", details: "฿1,809", time: "2026-02-05T08:32:54.870Z", user: "kk" }
-        ]
-      };
-
-      // Initial load: localStorage → check if real data → seed if needed → sync
+      // Initial load: read localStorage for a fast first paint, then always
+      // reconcile with the Google Sheet, which is the source of truth. The
+      // hasSyncedRef guard ensures we never push local data up before this
+      // pull confirms the sheet's contents (prevents stale-data overwrites).
+      // NOTE: the old FIREBASE_SEED_DATA one-time migration seed was removed —
+      // it was obsolete and could resurrect ancient data over live records.
       useEffect(() => {
-        let hasLocalData = false;
         const backup = localStorage.getItem('dogLog_backup');
+        let hasLocalData = false;
         if (backup) {
           try {
             const data = JSON.parse(backup);
             hasLocalData = data.dogs && data.dogs.length > 0;
-            if (hasLocalData) {
-              loadFromLocalStorage();
-            }
+            if (hasLocalData) loadFromLocalStorage();
           } catch (e) {}
         }
-
-        if (!hasLocalData) {
-          if (appsScriptUrl) {
-            // Fresh browser but sync is configured: pull live data from the sheet.
-            // (syncFromSheets keeps local data if the sheet is empty.)
-            console.log('No local data, syncing from Google Sheets...');
-            setTimeout(() => syncFromSheets(), 500);
-          } else {
-            // No sync configured: seed from the one-time Firebase migration snapshot (offline fallback).
-            console.log('Seeding data from Firebase migration...');
-            setDogs(FIREBASE_SEED_DATA.dogs);
-            setBills(FIREBASE_SEED_DATA.bills);
-            setMedications(FIREBASE_SEED_DATA.medications);
-            setCompanyInfo(FIREBASE_SEED_DATA.companyInfo);
-            setActivityLog(FIREBASE_SEED_DATA.activityLog);
-            localStorage.setItem('dogLog_backup', JSON.stringify(FIREBASE_SEED_DATA));
-          }
-        } else if (appsScriptUrl) {
-          // Has local data already, sync from sheet
-          setTimeout(() => syncFromSheets(), 1000);
+        if (appsScriptUrl) {
+          setTimeout(() => syncFromSheets(), hasLocalData ? 1000 : 500);
         }
       }, []);
 
