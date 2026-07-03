@@ -39,8 +39,27 @@
     ];
 
     const AVAILABLE_ICONS = ['💊', '💉', '🩺', '🏥', '💪', '🩹', '🧴', '🐾', '❤️', '⭐'];
-    // Icons for vet-cost breakdown line items (tap an item's icon to cycle through these)
-    const VETCOST_ICONS = ['🧪', '💉', '🛏️', '🩺', '🔧', '👨‍⚕️', '💊', '🩹', '👩‍⚕️', '🍖', '🏥', '💰'];
+
+    // Read-only itemized breakdown of Mootoo's hospitalization invoice
+    // (Family Pet Hospital, Chiang Mai — 29 Jun 2026). Shown as a collapsible
+    // accordion in the Donations tab; independent of the Vet Cost total.
+    const VET_COST_BREAKDOWN = {
+      title: "Mootoo — Hospitalization",
+      subtitle: "Family Pet Hospital, Chiang Mai · 29 Jun 2026",
+      vatRate: 7,
+      items: [
+        { icon: '🧪', label: 'Laboratory tests', amount: 2686.89 },
+        { icon: '💉', label: 'IV fluids & injections', amount: 1897.23 },
+        { icon: '🛏️', label: 'Hospitalization (4 days)', amount: 934.60 },
+        { icon: '🩺', label: 'Medical procedures', amount: 700.92 },
+        { icon: '🔧', label: 'Medical equipment', amount: 448.60 },
+        { icon: '👨‍⚕️', label: 'Doctor fee', amount: 560.76 },
+        { icon: '💊', label: 'Medication', amount: 457.94 },
+        { icon: '🩹', label: 'Medical supplies', amount: 752.35 },
+        { icon: '👩‍⚕️', label: 'Nursing care', amount: 299.08 },
+        { icon: '🍖', label: 'Food & supplements', amount: 205.60 },
+      ],
+    };
 
     // Default Google Apps Script Web App URL (public "Anyone" access — syncs without sign-in)
     const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxaMGxWslhXYVAbTZihKLAGvTpb3ss49i_FSmuU2zBMgRVeqLbB-g8UjXeUZjp5MXKz/exec';
@@ -50,7 +69,6 @@
       const [bills, setBills] = useState([]);
       const [donations, setDonations] = useState([]);
       const [vetCosts, setVetCosts] = useState([]);
-      const [expandedVets, setExpandedVets] = useState({});
       const [medications, setMedications] = useState(DEFAULT_MEDICATIONS);
       const [companyInfo, setCompanyInfo] = useState({ name: '', address: '', email: '' });
       const [activeTab, setActiveTab] = useState('donations');
@@ -258,7 +276,7 @@
         const donationsData = donations.map(d => ({ ID: d.id, Donor: d.donor, Amount: d.amount, Date: d.date }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(donationsData.length ? donationsData : [{ ID: '', Donor: '', Amount: '', Date: '' }]), 'Donations');
         // VetCosts sheet
-        const vetCostsData = vetCosts.map(v => ({ ID: v.id, Description: v.description, Amount: v.amount, Date: v.date, VatRate: v.vatRate || '', Items: v.items && v.items.length ? JSON.stringify(v.items) : '' }));
+        const vetCostsData = vetCosts.map(v => ({ ID: v.id, Description: v.description, Amount: v.amount, Date: v.date }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vetCostsData.length ? vetCostsData : [{ ID: '', Description: '', Amount: '', Date: '' }]), 'VetCosts');
         // Medications sheet
         const medsData = medications.map(m => ({ ID: m.id, Name: m.name, Interval: m.interval, Icon: m.icon }));
@@ -570,20 +588,11 @@
       };
 
       // Vet cost functions
-      // When an entry has breakdown items, its amount is computed = subtotal + VAT.
-      const recomputeVetAmount = (v) => {
-        if (v.items && v.items.length > 0) {
-          const sub = v.items.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0);
-          const vat = sub * ((parseFloat(v.vatRate) || 0) / 100);
-          return { ...v, amount: (sub + vat).toFixed(2) };
-        }
-        return v;
-      };
       const addVetCost = () => {
         const today = new Date();
         setVetCosts([...vetCosts, { id: Date.now(), description: '', amount: '', date: today.toISOString().split('T')[0] }]);
       };
-      const updateVetCost = (id, field, value) => setVetCosts(vetCosts.map(v => v.id === id ? recomputeVetAmount({ ...v, [field]: value }) : v));
+      const updateVetCost = (id, field, value) => setVetCosts(vetCosts.map(v => v.id === id ? { ...v, [field]: value } : v));
       const removeVetCost = (id) => {
         const vc = vetCosts.find(v => v.id === id);
         if (confirm(`Remove vet cost "${vc?.description || 'entry'}"?`)) {
@@ -591,35 +600,6 @@
           logActivity('removed vet cost', vc?.description);
         }
       };
-      const toggleVetExpand = (id) => setExpandedVets(prev => ({ ...prev, [id]: !prev[id] }));
-      const addVetCostItem = (id) => {
-        setVetCosts(vetCosts.map(v => {
-          if (v.id !== id) return v;
-          const items = [...(v.items || []), { id: Date.now(), icon: '💊', label: '', amount: '' }];
-          const vatRate = (v.vatRate === undefined || v.vatRate === '') ? 7 : v.vatRate;
-          return recomputeVetAmount({ ...v, items, vatRate });
-        }));
-        setExpandedVets(prev => ({ ...prev, [id]: true }));
-      };
-      const updateVetCostItem = (id, itemId, field, value) => setVetCosts(vetCosts.map(v => {
-        if (v.id !== id) return v;
-        const items = (v.items || []).map(it => it.id === itemId ? { ...it, [field]: value } : it);
-        return recomputeVetAmount({ ...v, items });
-      }));
-      const cycleVetCostItemIcon = (id, itemId) => setVetCosts(vetCosts.map(v => {
-        if (v.id !== id) return v;
-        const items = (v.items || []).map(it => {
-          if (it.id !== itemId) return it;
-          const idx = VETCOST_ICONS.indexOf(it.icon);
-          return { ...it, icon: VETCOST_ICONS[(idx + 1) % VETCOST_ICONS.length] };
-        });
-        return { ...v, items };
-      }));
-      const removeVetCostItem = (id, itemId) => setVetCosts(vetCosts.map(v => {
-        if (v.id !== id) return v;
-        const items = (v.items || []).filter(it => it.id !== itemId);
-        return recomputeVetAmount({ ...v, items });
-      }));
 
       // Find invoice image for a bill (may be stored on another bill in same batch)
       const getInvoiceImage = (bill) => {
@@ -1493,95 +1473,74 @@
                       <label className="block text-sm font-semibold text-rose-800">🐕 Mootoo Vet Costs</label>
                       <span className="text-sm font-bold text-rose-700">฿{mootooVetCost.toLocaleString()}</span>
                     </div>
-                    {vetCosts.map(v => {
-                      const hasItems = v.items && v.items.length > 0;
-                      const subtotal = hasItems ? v.items.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0) : 0;
-                      const vatRate = parseFloat(v.vatRate) || 0;
-                      const vat = subtotal * vatRate / 100;
-                      const total = subtotal + vat;
-                      const expanded = !!expandedVets[v.id];
-                      const money = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                      return (
-                        <div key={v.id} className="p-2.5 rounded-lg border bg-white">
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1 min-w-0">
-                              <input
-                                value={v.description}
-                                placeholder="What was it for?"
-                                onChange={e => updateVetCost(v.id, 'description', e.target.value)}
-                                className="w-full bg-transparent outline-none text-base mb-2"
-                              />
-                              <div className="flex flex-wrap gap-2 items-center">
-                                {hasItems ? (
-                                  <span className="font-medium text-rose-600">฿{money(total)}</span>
-                                ) : (
-                                  <div className="flex items-center gap-1">
-                                    <span className="text-gray-400">฿</span>
-                                    <input
-                                      type="number"
-                                      value={v.amount}
-                                      placeholder="0"
-                                      onChange={e => updateVetCost(v.id, 'amount', e.target.value)}
-                                      className="w-24 bg-transparent outline-none font-medium text-rose-600"
-                                    />
-                                  </div>
-                                )}
+                    {vetCosts.map(v => (
+                      <div key={v.id} className="p-2.5 rounded-lg border bg-white">
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <input
+                              value={v.description}
+                              placeholder="What was it for?"
+                              onChange={e => updateVetCost(v.id, 'description', e.target.value)}
+                              className="w-full bg-transparent outline-none text-base mb-2"
+                            />
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <div className="flex items-center gap-1">
+                                <span className="text-gray-400">฿</span>
                                 <input
-                                  type="date"
-                                  value={v.date}
-                                  onChange={e => updateVetCost(v.id, 'date', e.target.value)}
-                                  className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
+                                  type="number"
+                                  value={v.amount}
+                                  placeholder="0"
+                                  onChange={e => updateVetCost(v.id, 'amount', e.target.value)}
+                                  className="w-24 bg-transparent outline-none font-medium text-rose-600"
                                 />
-                                <button
-                                  onClick={() => hasItems ? toggleVetExpand(v.id) : addVetCostItem(v.id)}
-                                  className="text-xs text-rose-500 border border-rose-200 rounded-full px-2 py-1"
-                                >
-                                  {hasItems ? (expanded ? '▾ Hide breakdown' : `▸ Breakdown (${v.items.length})`) : '+ Breakdown'}
-                                </button>
                               </div>
+                              <input
+                                type="date"
+                                value={v.date}
+                                onChange={e => updateVetCost(v.id, 'date', e.target.value)}
+                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
+                              />
                             </div>
-                            <button onClick={() => removeVetCost(v.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
                           </div>
-                          {hasItems && expanded && (
-                            <div className="mt-2 pl-2 border-l-2 border-rose-100 space-y-1.5">
-                              {v.items.map(it => (
-                                <div key={it.id} className="flex items-center gap-1.5">
-                                  <button onClick={() => cycleVetCostItemIcon(v.id, it.id)} className="text-base w-7 h-7 flex items-center justify-center rounded hover:bg-rose-50" title="Tap to change icon">{it.icon}</button>
-                                  <input
-                                    value={it.label}
-                                    placeholder="Item"
-                                    onChange={e => updateVetCostItem(v.id, it.id, 'label', e.target.value)}
-                                    className="flex-1 min-w-0 bg-transparent outline-none text-sm"
-                                  />
-                                  <span className="text-gray-400 text-sm">฿</span>
-                                  <input
-                                    type="number"
-                                    value={it.amount}
-                                    placeholder="0"
-                                    onChange={e => updateVetCostItem(v.id, it.id, 'amount', e.target.value)}
-                                    className="w-20 bg-transparent outline-none text-sm text-rose-600 text-right"
-                                  />
-                                  <button onClick={() => removeVetCostItem(v.id, it.id)} className="text-red-300 px-1 hover:text-red-500">✕</button>
-                                </div>
-                              ))}
-                              <button onClick={() => addVetCostItem(v.id)} className="text-xs text-rose-400 py-1">+ Add item</button>
-                              <div className="border-t border-rose-100 pt-1.5 text-sm space-y-0.5">
-                                <div className="flex justify-between text-gray-500"><span>Subtotal</span><span>฿{money(subtotal)}</span></div>
-                                <div className="flex justify-between items-center text-gray-500">
-                                  <span className="flex items-center gap-1">VAT
-                                    <input type="number" value={v.vatRate ?? ''} onChange={e => updateVetCost(v.id, 'vatRate', e.target.value)} className="w-10 bg-transparent border rounded px-1 text-center outline-none" />%
-                                  </span>
-                                  <span>฿{money(vat)}</span>
-                                </div>
-                                <div className="flex justify-between font-semibold text-rose-700"><span>Total</span><span>฿{money(total)}</span></div>
-                              </div>
-                            </div>
-                          )}
+                          <button onClick={() => removeVetCost(v.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
                         </div>
-                      );
-                    })}
+                      </div>
+                    ))}
                     <button onClick={addVetCost} className="w-full py-3 border-2 border-dashed border-rose-200 rounded-xl text-rose-400 text-sm">+ Add Vet Cost</button>
                   </div>
+
+                  {/* Read-only itemized cost breakdown (collapsible) */}
+                  {(() => {
+                    const b = VET_COST_BREAKDOWN;
+                    const sub = b.items.reduce((s, i) => s + i.amount, 0);
+                    const vat = sub * b.vatRate / 100;
+                    const total = sub + vat;
+                    const m = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    return (
+                      <details className="bg-white border border-rose-100 rounded-xl overflow-hidden">
+                        <summary className="p-3 cursor-pointer flex items-center justify-between gap-2">
+                          <span className="font-semibold text-rose-800">🧾 Cost Breakdown</span>
+                          <span className="font-bold text-rose-700">฿{m(total)}</span>
+                        </summary>
+                        <div className="px-3 pb-3">
+                          <p className="text-xs text-gray-400 mb-2">{b.title} · {b.subtitle}</p>
+                          <div className="space-y-1">
+                            {b.items.map((it, idx) => (
+                              <div key={idx} className="flex items-center justify-between text-sm">
+                                <span className="flex items-center gap-2 text-gray-700"><span className="w-5 text-center">{it.icon}</span>{it.label}</span>
+                                <span className="text-gray-600">฿{m(it.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="border-t border-rose-100 mt-2 pt-2 text-sm space-y-0.5">
+                            <div className="flex justify-between text-gray-500"><span>Subtotal</span><span>฿{m(sub)}</span></div>
+                            <div className="flex justify-between text-gray-500"><span>VAT {b.vatRate}%</span><span>฿{m(vat)}</span></div>
+                            <div className="flex justify-between font-bold text-rose-700"><span>Total</span><span>฿{m(total)}</span></div>
+                          </div>
+                        </div>
+                      </details>
+                    );
+                  })()}
 
                   <div className="flex justify-between items-center flex-wrap gap-2">
                     <h3 className="font-semibold">💝 Donations</h3>

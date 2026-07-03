@@ -116,15 +116,13 @@ function writeAllData(ss, data) {
     }));
     writeSheet(ss, SHEET_NAMES.donations, donationsRows);
   }
-  // Write VetCosts (Items = JSON breakdown of line items; VatRate = % VAT)
+  // Write VetCosts
   if (data.vetCosts) {
     const vetCostsRows = data.vetCosts.map(v => ({
       ID: v.id,
       Description: v.description || '',
       Amount: v.amount || 0,
-      Date: v.date || '',
-      VatRate: (v.vatRate === undefined || v.vatRate === null) ? '' : v.vatRate,
-      Items: (v.items && v.items.length) ? JSON.stringify(v.items) : ''
+      Date: v.date || ''
     }));
     writeSheet(ss, SHEET_NAMES.vetCosts, vetCostsRows);
   }
@@ -357,19 +355,12 @@ function transformDonationsFromSheet(rows) {
 }
 
 function transformVetCostsFromSheet(rows) {
-  return rows.filter(r => r.Description || r.Amount).map(r => {
-    const vc = {
-      id: parseInt(r.ID) || Date.now() + Math.random(),
-      description: r.Description || '',
-      amount: r.Amount || '0',
-      date: r.Date || ''
-    };
-    if (r.VatRate !== undefined && r.VatRate !== '') vc.vatRate = r.VatRate;
-    if (r.Items) {
-      try { const items = JSON.parse(r.Items); if (items && items.length) vc.items = items; } catch (e) {}
-    }
-    return vc;
-  });
+  return rows.filter(r => r.Description || r.Amount).map(r => ({
+    id: parseInt(r.ID) || Date.now() + Math.random(),
+    description: r.Description || '',
+    amount: r.Amount || '0',
+    date: r.Date || ''
+  }));
 }
 
 function transformMedsFromSheet(rows) {
