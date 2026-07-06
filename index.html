@@ -41,22 +41,24 @@
     const AVAILABLE_ICONS = ['💊', '💉', '🩺', '🏥', '💪', '🩹', '🧴', '🐾', '❤️', '⭐'];
 
     // Read-only itemized breakdown of Mootoo's hospitalization invoice
-    // (Family Pet Hospital, Chiang Mai — 29 Jun 2026). Shown as a collapsible
-    // accordion in the Donations tab; independent of the Vet Cost total.
+    // (Family Pet Hospital, Chiang Mai — 6 Jul 2026, Receipt/Tax Invoice
+    // FP-RI 01/66-060769). Shown as a collapsible accordion in the Donations
+    // tab; independent of the Vet Cost total.
+    // Subtotal ฿15,093.55 + 7% VAT ฿1,056.56 = ฿16,150.11 grand total.
     const VET_COST_BREAKDOWN = {
       title: "Mootoo — Hospitalization",
-      subtitle: "Family Pet Hospital, Chiang Mai · 29 Jun 2026",
+      subtitle: "Family Pet Hospital, Chiang Mai · 6 Jul 2026",
       vatRate: 7,
       items: [
-        { icon: '🧪', label: 'Laboratory tests', amount: 2686.89 },
-        { icon: '💉', label: 'IV fluids & injections', amount: 1897.23 },
-        { icon: '🛏️', label: 'Hospitalization (4 days)', amount: 934.60 },
-        { icon: '🩺', label: 'Medical procedures', amount: 700.92 },
-        { icon: '🔧', label: 'Medical equipment', amount: 448.60 },
-        { icon: '👨‍⚕️', label: 'Doctor fee', amount: 560.76 },
-        { icon: '💊', label: 'Medication', amount: 457.94 },
-        { icon: '🩹', label: 'Medical supplies', amount: 752.35 },
-        { icon: '👩‍⚕️', label: 'Nursing care', amount: 299.08 },
+        { icon: '💉', label: 'IV fluids & injections', amount: 3654.25 },
+        { icon: '🧪', label: 'Laboratory tests', amount: 3401.82 },
+        { icon: '🛏️', label: 'Hospitalization (8 days)', amount: 1869.20 },
+        { icon: '💊', label: 'Medication', amount: 1322.45 },
+        { icon: '🩺', label: 'Medical procedures', amount: 1308.39 },
+        { icon: '👨‍⚕️', label: 'Doctor fee', amount: 1121.52 },
+        { icon: '🩹', label: 'Medical supplies', amount: 827.11 },
+        { icon: '🔧', label: 'Medical equipment', amount: 785.05 },
+        { icon: '👩‍⚕️', label: 'Nursing care', amount: 598.16 },
         { icon: '🍖', label: 'Food & supplements', amount: 205.60 },
       ],
     };
