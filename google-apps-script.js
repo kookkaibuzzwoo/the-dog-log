@@ -18,6 +18,7 @@ const SHEET_NAMES = {
   bills: 'Bills',
   donations: 'Donations',
   vetCosts: 'VetCosts',
+  updates: 'Updates',
   medications: 'Medications',
   company: 'Company',
   activityLog: 'ActivityLog'
@@ -41,6 +42,9 @@ function doGet(e) {
     // Read VetCosts
     data.vetCosts = readSheet(ss, SHEET_NAMES.vetCosts);
 
+    // Read Updates (Mootoo update feed)
+    data.updates = readSheet(ss, SHEET_NAMES.updates);
+
     // Read Medications
     data.medications = readSheet(ss, SHEET_NAMES.medications);
 
@@ -56,6 +60,7 @@ function doGet(e) {
     data.bills = transformBillsFromSheet(data.bills);
     data.donations = transformDonationsFromSheet(data.donations);
     data.vetCosts = transformVetCostsFromSheet(data.vetCosts);
+    data.updates = transformUpdatesFromSheet(data.updates);
     data.medications = transformMedsFromSheet(data.medications);
     data.companyInfo = {
       name: data.companyInfo.Name || data.companyInfo.name || '',
@@ -126,6 +131,19 @@ function writeAllData(ss, data) {
     }));
     writeSheet(ss, SHEET_NAMES.vetCosts, vetCostsRows);
   }
+  // Write Updates (Mootoo update feed)
+  if (data.updates) {
+    const updatesRows = data.updates.map(u => ({
+      ID: u.id,
+      Date: u.date || '',
+      Icon: u.icon || '🐾',
+      Title: u.title || '',
+      Note: u.note || '',
+      Author: u.author || '',
+      Status: u.status || 'recovering'
+    }));
+    writeSheet(ss, SHEET_NAMES.updates, updatesRows);
+  }
   // Write Medications
   if (data.medications) {
     const medsRows = data.medications.map(m => ({
@@ -165,6 +183,7 @@ function collectAllData(ss) {
   data.bills = transformBillsFromSheet(readSheet(ss, SHEET_NAMES.bills));
   data.donations = transformDonationsFromSheet(readSheet(ss, SHEET_NAMES.donations));
   data.vetCosts = transformVetCostsFromSheet(readSheet(ss, SHEET_NAMES.vetCosts));
+  data.updates = transformUpdatesFromSheet(readSheet(ss, SHEET_NAMES.updates));
   const companyRows = readSheet(ss, SHEET_NAMES.company);
   const c = companyRows.length > 0 ? companyRows[0] : {};
   data.companyInfo = {
@@ -360,6 +379,18 @@ function transformVetCostsFromSheet(rows) {
     description: r.Description || '',
     amount: r.Amount || '0',
     date: r.Date || ''
+  }));
+}
+
+function transformUpdatesFromSheet(rows) {
+  return rows.filter(r => r.Title || r.Note || r.Date).map(r => ({
+    id: parseInt(r.ID) || Date.now() + Math.random(),
+    date: r.Date || '',
+    icon: r.Icon || '🐾',
+    title: r.Title || '',
+    note: r.Note || '',
+    author: r.Author || '',
+    status: r.Status || 'recovering'
   }));
 }
 

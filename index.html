@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The Dog Log 🐕</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -11,12 +11,37 @@
   <!-- Google Sheets sync via Apps Script (replaces Firebase) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body {
+      font-family: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background-color: #F6EFE3;
+      background-image: radial-gradient(rgba(160,130,90,.09) 1px, transparent 1px);
+      background-size: 22px 22px;
+      color: #5C4E3E;
+    }
+    .font-hand { font-family: 'Patrick Hand', cursive; }
     .pulse { animation: pulse 2s infinite; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
     input[type="date"] { min-height: 44px; }
     button { min-height: 44px; }
+    /* Never keep a tilt while someone is typing inside a rotated card */
+    .untilt-focus:focus-within { transform: rotate(0deg) !important; }
+    /* Pulsing starburst seal (recovery fund hero) */
+    @keyframes seal-pop { 0%, 100% { transform: rotate(-8deg) scale(1); } 50% { transform: rotate(-8deg) scale(1.06); } }
+    @keyframes seal-ring { 0% { transform: scale(.9); opacity: .55; } 100% { transform: scale(1.5); opacity: 0; } }
+    /* Visible keyboard focus everywhere, even where outline-none is used for pointer users */
+    :is(button, input, select, textarea, a, summary):focus-visible { outline: 2px solid #3A2E25 !important; outline-offset: 2px; }
+    /* Respect reduced-motion preferences */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+    /* Touch devices always get full-size targets, even where desktop uses compact inputs */
+    @media (pointer: coarse) {
+      input, button, select { min-height: 44px !important; }
+    }
   </style>
 </head>
 <body>
@@ -66,11 +91,37 @@
     // Default Google Apps Script Web App URL (public "Anyone" access — syncs without sign-in)
     const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxaMGxWslhXYVAbTZihKLAGvTpb3ss49i_FSmuU2zBMgRVeqLbB-g8UjXeUZjp5MXKz/exec';
 
+    // ——— Scrapbook design tokens (styling only) ———
+    const UI = {
+      card: "bg-white border-2 border-[#3A2E25] rounded-[14px] shadow-[4px_5px_0_rgba(58,46,37,0.18)]",
+      btnGreen: "bg-[#35794C] hover:bg-[#2C6740] border-2 border-[#3A2E25] text-white rounded-[10px] px-4 py-[7px] font-hand text-base shadow-[2px_2px_0_rgba(58,46,37,0.3)] transition-all",
+      btnWhite: "bg-white hover:bg-[#F6EFE3] border-2 border-[#3A2E25] text-[#3A2E25] rounded-[10px] px-4 py-[7px] font-hand text-base shadow-[2px_2px_0_rgba(58,46,37,0.3)] transition-all",
+      btnSmall: "bg-white hover:bg-[#FFD966] border-2 border-[#3A2E25] text-[#3A2E25] rounded-lg px-3.5 py-1.5 font-hand text-[15px] shadow-[2px_2px_0_rgba(58,46,37,0.25)] transition-all",
+      pill: "text-white rounded-full px-3 py-[3px] text-xs font-black whitespace-nowrap",
+    };
+
+    // Mootoo update statuses → condition sticker colors (scrapbook tints)
+    const UPDATE_STATUSES = {
+      recovering: { label: 'Recovering 🐾', bg: '#E9F5E4', border: '#3E8E5A', text: '#2F7A4D' },
+      healthy:    { label: 'Healthy 🎉',    bg: '#E9F5E4', border: '#3E8E5A', text: '#2F7A4D' },
+      care:       { label: 'Under care 💊', bg: '#FDF8EA', border: '#E0A93E', text: '#A87717' },
+      critical:   { label: 'Critical 🏥',   bg: '#FDF1F4', border: '#C74C6B', text: '#B84A67' },
+    };
+    const UPDATE_ICONS = ['🐾', '🍚', '🏠', '🏥', '💊', '🩺', '🎉', '😴', '❤️'];
+
+    // Decorative "tape" strip pinned to card tops (visual only)
+    const Tape = ({ blue, rot }) => (
+      <div style={{ position: 'absolute', top: -13, left: '50%', transform: `translateX(-50%) rotate(${rot || -2}deg)`,
+        background: blue ? 'rgba(178,216,247,.85)' : 'rgba(255,217,102,.85)',
+        border: '1px solid rgba(58,46,37,.2)', width: 110, height: 26, borderRadius: 3 }} />
+    );
+
     const App = () => {
       const [dogs, setDogs] = useState([]);
       const [bills, setBills] = useState([]);
       const [donations, setDonations] = useState([]);
       const [vetCosts, setVetCosts] = useState([]);
+      const [updates, setUpdates] = useState([]);
       const [medications, setMedications] = useState(DEFAULT_MEDICATIONS);
       const [companyInfo, setCompanyInfo] = useState({ name: '', address: '', email: '' });
       const [activeTab, setActiveTab] = useState('donations');
@@ -208,6 +259,7 @@
             // Legacy migration: single vet cost value → one dated entry
             setVetCosts([{ id: Date.now(), description: 'Vet cost', amount: data.companyInfo.mootooVetCost, date: '' }]);
           }
+          if (data.updates && data.updates.length > 0) setUpdates(data.updates.map(u => ({ ...u, date: normalizeDate(u.date) })));
           if (data.medications && data.medications.length > 0) setMedications(data.medications);
           if (data.companyInfo && (data.companyInfo.name || data.companyInfo.mootooVetCost)) setCompanyInfo(data.companyInfo);
           if (data.activityLog && data.activityLog.length > 0) setActivityLog(data.activityLog);
@@ -229,7 +281,7 @@
       // Sync TO Google Sheets (via Apps Script)
       const saveToSheets = async () => {
         if (!appsScriptUrl || isLoadingRef.current) return;
-        const payload = { dogs, bills, donations, vetCosts, medications, companyInfo, activityLog };
+        const payload = { dogs, bills, donations, vetCosts, updates, medications, companyInfo, activityLog };
         // Defense-in-depth: refuse to overwrite the sheet with a drastically smaller
         // dataset (the signature of the corruption that wiped everything).
         const prevCount = lastGoodCountsRef.current;
@@ -280,6 +332,9 @@
         // VetCosts sheet
         const vetCostsData = vetCosts.map(v => ({ ID: v.id, Description: v.description, Amount: v.amount, Date: v.date }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(vetCostsData.length ? vetCostsData : [{ ID: '', Description: '', Amount: '', Date: '' }]), 'VetCosts');
+        // Updates sheet
+        const updatesData = updates.map(u => ({ ID: u.id, Date: u.date, Icon: u.icon, Title: u.title, Note: u.note, Author: u.author, Status: u.status }));
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(updatesData.length ? updatesData : [{ ID: '', Date: '', Icon: '', Title: '', Note: '', Author: '', Status: '' }]), 'Updates');
         // Medications sheet
         const medsData = medications.map(m => ({ ID: m.id, Name: m.name, Interval: m.interval, Icon: m.icon }));
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(medsData), 'Medications');
@@ -339,6 +394,7 @@
             if (data.donations) setDonations(data.donations);
             if (data.vetCosts) setVetCosts(data.vetCosts);
             else if (data.companyInfo?.mootooVetCost) setVetCosts([{ id: Date.now(), description: 'Vet cost', amount: data.companyInfo.mootooVetCost, date: '' }]);
+            if (data.updates) setUpdates(data.updates);
             if (data.medications) setMedications(data.medications);
             if (data.companyInfo) setCompanyInfo(data.companyInfo);
             if (data.activityLog) setActivityLog(data.activityLog);
@@ -352,11 +408,11 @@
         if (dogs.length === 0 && bills.length === 0 && medications.length === DEFAULT_MEDICATIONS.length) return;
         if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = setTimeout(() => {
-          localStorage.setItem('dogLog_backup', JSON.stringify({ dogs, bills, donations, vetCosts, medications, companyInfo, activityLog }));
+          localStorage.setItem('dogLog_backup', JSON.stringify({ dogs, bills, donations, vetCosts, updates, medications, companyInfo, activityLog }));
           // Only push to the sheet once we've confirmed its contents via an initial pull.
           if (appsScriptUrl && hasSyncedRef.current) saveToSheets();
         }, 1000);
-      }, [dogs, bills, donations, vetCosts, medications, companyInfo, activityLog]);
+      }, [dogs, bills, donations, vetCosts, updates, medications, companyInfo, activityLog]);
 
       // Save Apps Script URL to localStorage
       useEffect(() => {
@@ -367,6 +423,9 @@
       useEffect(() => {
         if (!appsScriptUrl) return;
         const interval = setInterval(() => {
+          // Don't pull while someone is typing — replacing state mid-edit would eat their keystrokes
+          const el = document.activeElement;
+          if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT')) return;
           syncFromSheets();
         }, 30000);
         return () => clearInterval(interval);
@@ -600,6 +659,22 @@
         if (confirm(`Remove vet cost "${vc?.description || 'entry'}"?`)) {
           setVetCosts(vetCosts.filter(v => v.id !== id));
           logActivity('removed vet cost', vc?.description);
+        }
+      };
+
+      // Mootoo update functions (mirrors the donation/vet-cost add-row pattern)
+      const addUpdate = () => {
+        if (!userName) { setShowNamePrompt(true); return; }
+        const latestStatus = updates.length ? [...updates].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.id - a.id)[0].status : 'recovering';
+        setUpdates([...updates, { id: Date.now(), date: today.toISOString().split('T')[0], icon: '🐾', title: '', note: '', author: userName, status: latestStatus || 'recovering' }]);
+        logActivity('added update', 'Mootoo');
+      };
+      const updateUpdate = (id, field, value) => setUpdates(updates.map(u => u.id === id ? { ...u, [field]: value } : u));
+      const removeUpdate = (id) => {
+        const u = updates.find(x => x.id === id);
+        if (confirm(`Remove update "${u?.title || 'entry'}"?`)) {
+          setUpdates(updates.filter(x => x.id !== id));
+          logActivity('removed update', u?.title || 'Mootoo');
         }
       };
 
@@ -1009,7 +1084,7 @@
         const unpaid = bills.filter(b => !b.paid);
         if (!unpaid.length) { alert('No unpaid bills!'); return; }
         const total = unpaid.reduce((s, b) => s + (parseFloat(b.amount) || 0), 0);
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Invoice</title><style>body{font-family:Arial;max-width:800px;margin:0 auto;padding:20px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:10px}th{background:#f5f5f5}</style></head><body><h1>🐕 The Dog Log - Invoice</h1><p>${today.toLocaleDateString('th-TH')}</p>${companyInfo.name ? `<p><b>To:</b> ${companyInfo.name}</p>` : ''}<table><tr><th>Description</th><th>Amount (฿)</th></tr>${unpaid.map(b => `<tr><td>${b.description}</td><td style="text-align:right">${parseFloat(b.amount).toLocaleString()}</td></tr>`).join('')}</table><p style="font-size:1.2em;text-align:right"><b>Total: ฿${total.toLocaleString()}</b></p></body></html>`;
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Invoice</title><link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet"><style>body{font-family:'Nunito',Arial,sans-serif;color:#3A2E25;background:#F6EFE3;max-width:800px;margin:0 auto;padding:32px 24px}h1{font-family:'Patrick Hand',cursive;font-weight:400;font-size:34px;margin:0 0 4px}table{width:100%;border-collapse:collapse;margin:20px 0;background:#fff;border:2px solid #3A2E25;border-radius:10px}th,td{border-bottom:2px dotted #D9CBB4;padding:10px 12px;text-align:left}th{background:#F6EFE3;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#6E5A42;border-bottom:2px solid #3A2E25}p{color:#6E5A42}</style></head><body><h1>🐕 The Dog Log — Invoice</h1><p>${today.toLocaleDateString('th-TH')}</p>${companyInfo.name ? `<p><b>To:</b> ${companyInfo.name}</p>` : ''}<table><tr><th>Description</th><th style="text-align:right">Amount (฿)</th></tr>${unpaid.map(b => `<tr><td>${b.description}</td><td style="text-align:right">${parseFloat(b.amount).toLocaleString()}</td></tr>`).join('')}</table><p style="font-size:1.3em;text-align:right;font-family:'Patrick Hand',cursive;color:#3A2E25"><b>Total: ฿${total.toLocaleString()}</b></p></body></html>`;
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
         a.download = `invoice-${today.toISOString().split('T')[0]}.html`;
@@ -1044,43 +1119,42 @@
       const donationBalance = donationsTotal - mootooVetCost;
 
       return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-3 sm:p-4">
-          <div className="max-w-4xl mx-auto space-y-3 sm:space-y-4">
+        <div className="min-h-screen p-4 md:px-10 md:pt-[30px] md:pb-11">
+          <div className="max-w-[1160px] mx-auto flex flex-col gap-6">
 
-            {/* Header - Mobile Optimized */}
-            <div className="bg-white rounded-2xl shadow-sm p-3 sm:p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 sm:gap-3">
-                  <span className="text-2xl sm:text-3xl">🐕</span>
-                  <div>
-                    <h1 className="text-lg sm:text-xl font-bold">The Dog Log</h1>
-                    <p className="text-xs sm:text-sm text-gray-500 hidden sm:block">Office Medication & Bill Tracker</p>
-                  </div>
+            {/* Header */}
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="flex items-center gap-4">
+                <div className="w-[58px] h-[58px] rounded-full bg-white border-[3px] border-[#3A2E25] flex items-center justify-center text-[30px] rotate-[-6deg] shadow-[3px_3px_0_rgba(58,46,37,0.2)]">🐕</div>
+                <div>
+                  <h1 className="font-hand text-[34px] leading-none text-[#3A2E25]">The Dog Log</h1>
+                  <p className="text-xs text-[#6E5A42] font-bold tracking-[.1em] uppercase">Buzzwoo office dogs · est. with love</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap ${syncStatus === 'synced' ? 'bg-green-100 text-green-700' : syncStatus === 'error' ? 'bg-red-100 text-red-700' : syncStatus === 'syncing' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {syncStatus === 'synced' ? '🟢 Synced' : syncStatus === 'error' ? '🔴 Error' : syncStatus === 'syncing' ? '🟡 Syncing...' : '📊 Local'}
-                  </span>
-                  {appsScriptUrl && <button onClick={syncFromSheets} disabled={syncStatus === 'syncing'} className="px-2 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs" title="Sync from Sheet">🔄</button>}
-                  <button onClick={() => setShowSyncPanel(!showSyncPanel)} className="px-2 py-1.5 bg-green-100 text-green-700 rounded-full text-xs" title="Google Sheets Sync">📊</button>
-                  <button onClick={() => setShowSlackSettings(!showSlackSettings)} className={`px-2 py-1.5 rounded-full text-xs ${slackWebhook ? 'bg-purple-100 text-purple-700' : 'bg-gray-100'}`} title="Slack notifications">
-                    {slackWebhook ? '🔔' : '🔕'}
-                  </button>
-                  <button onClick={() => setShowEmployeeSettings(true)} className="px-2 py-1.5 bg-gray-100 rounded-full text-xs" title="Employee Settings">
-                    ⚙️
-                  </button>
-                  <button onClick={() => setUserName(prompt('Name:', userName) || userName)} className="px-2 sm:px-3 py-1.5 bg-gray-100 rounded-full text-xs sm:text-sm whitespace-nowrap">
-                    👤 {userName || 'Set Name'}
-                  </button>
-                </div>
+              </div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <button onClick={() => setShowSyncPanel(!showSyncPanel)} role="status" aria-live="polite"
+                  className={`font-hand text-[15px] rotate-[-2deg] bg-transparent px-1 ${syncStatus === 'synced' ? 'text-[#2F7A4D]' : syncStatus === 'error' ? 'text-[#B84A67]' : syncStatus === 'syncing' ? 'text-[#A87717]' : 'text-[#6E5A42]'}`}
+                  title="Google Sheets Sync">
+                  {syncStatus === 'synced' ? `✓ synced${lastSync ? ' ' + lastSync.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) : ''}` : syncStatus === 'error' ? '✗ sync error' : syncStatus === 'syncing' ? '…syncing' : '✎ local only'}
+                </button>
+                {appsScriptUrl && <button onClick={syncFromSheets} disabled={syncStatus === 'syncing'} aria-label="Sync now from Google Sheet" className="w-11 h-11 bg-white border-2 border-[#3A2E25] rounded-full text-sm shadow-[2px_2px_0_rgba(58,46,37,0.2)] hover:bg-[#F6EFE3] transition-all" title="Sync from Sheet">🔄</button>}
+                <button onClick={() => setShowSlackSettings(!showSlackSettings)} aria-label="Slack notification settings" className={`w-11 h-11 border-2 rounded-full text-sm shadow-[2px_2px_0_rgba(58,46,37,0.2)] transition-all ${slackWebhook ? 'bg-[#FFF3B8] border-[#3A2E25]' : 'bg-white border-[#C9B79E] hover:border-[#3A2E25]'}`} title="Slack notifications">
+                  {slackWebhook ? '🔔' : '🔕'}
+                </button>
+                <button onClick={() => setShowEmployeeSettings(true)} aria-label="Employee settings" className="w-11 h-11 bg-white border-2 border-[#C9B79E] hover:border-[#3A2E25] rounded-full text-sm shadow-[2px_2px_0_rgba(58,46,37,0.2)] transition-all" title="Employee Settings">
+                  ⚙️
+                </button>
+                <button onClick={() => setUserName(prompt('Name:', userName) || userName)} className="bg-white border-2 border-[#3A2E25] rounded-full px-4 py-1.5 text-[13px] font-extrabold text-[#3A2E25] shadow-[2px_2px_0_rgba(58,46,37,0.2)] hover:bg-[#F6EFE3] transition-all whitespace-nowrap">
+                  👤 {userName || 'Set Name'}
+                </button>
               </div>
             </div>
 
             {/* Slack Settings */}
             {showSlackSettings && (
-              <div className="bg-white rounded-2xl shadow-sm p-4">
+              <div className={`${UI.card} p-4`}>
                 <div className="flex justify-between items-center mb-3">
-                  <h3 className="font-semibold">Slack Notifications</h3>
+                  <h3 className="font-hand text-xl text-[#3A2E25]">🔔 Slack notifications</h3>
                   <button onClick={() => setShowSlackSettings(false)} className="text-gray-400 text-xl">&times;</button>
                 </div>
                 <p className="text-sm text-gray-600 mb-3">
@@ -1092,21 +1166,21 @@
                     value={slackWebhook}
                     onChange={e => setSlackWebhook(e.target.value)}
                     placeholder="https://hooks.slack.com/services/..."
-                    className="w-full p-3 border rounded-lg text-sm"
+                    className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px] text-sm"
                   />
                   <div className="flex gap-2">
                     <button
                       onClick={() => sendSlackNotification(getAlerts(), true)}
                       disabled={!slackWebhook}
-                      className="flex-1 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                      className={`flex-1 ${UI.btnGreen} disabled:opacity-50`}
                     >
-                      Send Test
+                      send test
                     </button>
                     <button
                       onClick={() => { setSlackWebhook(''); localStorage.removeItem('dogLog_slackWebhook'); localStorage.removeItem('dogLog_lastSlackNotify'); }}
-                      className="px-4 py-2 bg-gray-200 rounded-lg text-sm"
+                      className={UI.btnWhite}
                     >
-                      Clear
+                      clear
                     </button>
                   </div>
                   {slackStatus && (
@@ -1120,9 +1194,9 @@
 
             {/* Google Sheets Sync Panel */}
             {showSyncPanel && (
-              <div className="bg-white rounded-2xl shadow-sm p-4">
+              <div className={`${UI.card} p-4`}>
                 <div className="flex justify-between items-center mb-3">
-                  <h3 className="font-semibold">📊 Google Sheets Sync</h3>
+                  <h3 className="font-hand text-xl text-[#3A2E25]">📊 Google Sheets sync</h3>
                   <button onClick={() => setShowSyncPanel(false)} className="text-gray-400 text-xl">&times;</button>
                 </div>
                 <p className="text-sm text-gray-600 mb-3">
@@ -1134,21 +1208,21 @@
                     value={appsScriptUrl}
                     onChange={e => setAppsScriptUrl(e.target.value)}
                     placeholder="https://script.google.com/macros/s/.../exec"
-                    className="w-full p-3 border rounded-lg text-sm"
+                    className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px] text-sm"
                   />
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={syncFromSheets} disabled={!appsScriptUrl || syncStatus === 'syncing'} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium disabled:opacity-50">
-                      {syncStatus === 'syncing' ? 'Syncing...' : '🔄 Load from Sheet'}
+                    <button onClick={syncFromSheets} disabled={!appsScriptUrl || syncStatus === 'syncing'} className={`${UI.btnGreen} disabled:opacity-50`}>
+                      {syncStatus === 'syncing' ? '…syncing' : '🔄 load from sheet'}
                     </button>
-                    <button onClick={exportToExcel} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium">
-                      📥 Export .xlsx
+                    <button onClick={exportToExcel} className={UI.btnWhite}>
+                      📥 export .xlsx
                     </button>
-                    <a href={GSHEET_CONFIG.editUrl} target="_blank" className="px-4 py-2 bg-gray-100 rounded-lg text-sm font-medium inline-flex items-center">
-                      📝 Open Sheet
+                    <a href={GSHEET_CONFIG.editUrl} target="_blank" className={`${UI.btnWhite} inline-flex items-center no-underline`}>
+                      📝 open sheet
                     </a>
                   </div>
-                  <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
-                    <p className="font-medium mb-1">Setup:</p>
+                  <div className="bg-[#FBF8F0] border-[1.5px] border-dashed border-[#C9B79E] rounded-[10px] p-3 text-xs text-[#6E5A42]">
+                    <p className="font-hand text-sm mb-1">Setup:</p>
                     <ol className="list-decimal list-inside space-y-1">
                       <li>Open your Google Sheet → Extensions → Apps Script</li>
                       <li>Paste the provided script code</li>
@@ -1160,98 +1234,152 @@
               </div>
             )}
 
-            {/* Sync Status */}
-            {lastSync && syncStatus === 'synced' && (
-              <div className="bg-green-50 border border-green-200 rounded-xl p-2 text-center">
-                <span className="text-green-700 text-xs sm:text-sm">✓ Synced with Google Sheets {lastSync.toLocaleTimeString('th-TH')}</span>
-              </div>
-            )}
-
             {/* Error Message */}
             {syncStatus === 'error' && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-                <p className="text-red-700 text-sm font-medium">⚠️ Sync Error</p>
-                <p className="text-red-600 text-xs mt-1">
+              <div className="bg-[#FDF1F4] border-2 border-dashed border-[#D2607F] rounded-xl p-3">
+                <p className="text-[#B84A67] font-hand text-lg">⚠️ Sync error</p>
+                <p className="text-[#B84A67] text-xs mt-1 font-semibold">
                   {errorMessage || 'Could not connect to Google Sheets.'}
-                  {!appsScriptUrl && ' Set up Apps Script URL in the sync panel (📊 button).'}
+                  {!appsScriptUrl && ' Set up Apps Script URL in the sync panel (click the sync status).'}
                 </p>
               </div>
             )}
 
-            {/* Alerts */}
-            {alerts.length > 0 && (
-              <div className="bg-gradient-to-r from-orange-50 to-red-50 rounded-2xl p-3 sm:p-4">
-                <h3 className="font-semibold text-orange-700 mb-2 text-sm sm:text-base">🔔 Alerts</h3>
-                <div className="space-y-2">
-                  {alerts.slice(0, 3).map((a, i) => (
-                    <div key={i} className="flex justify-between items-center bg-white/80 rounded-lg px-3 py-2">
-                      <span className="text-sm truncate flex-1 mr-2">
-                        {a.dog ? <>{a.icon} <b>{a.dog}</b> - {a.med}</> : <>📄 {a.bill}</>}
-                      </span>
-                      <span className={`text-xs px-2 py-1 rounded-full whitespace-nowrap ${a.never ? 'bg-gray-100' : a.days < 0 ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                        {a.never ? 'Never' : a.days < 0 ? `${Math.abs(a.days)}d late` : `${a.days}d`}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Tabs */}
-            <div className="flex bg-white rounded-2xl p-1.5 shadow-sm overflow-x-auto">
+            {/* Tabs — index cards (right-edge fade hints at more tabs on narrow screens) */}
+            <div className="relative">
+              <div className="md:hidden pointer-events-none absolute inset-y-0 right-0 w-12 z-10" style={{ background: 'linear-gradient(to left, #F6EFE3 20%, rgba(246,239,227,0))' }}></div>
+              <div className="flex gap-2.5 overflow-x-auto pb-1 pr-10">
               {[
-                { id: 'donations', label: '💝 Donations' },
-                { id: 'medications', label: '💊 Meds' },
-                { id: 'bills', label: '📄 Bills' },
-                { id: 'copter', label: '🐕 Copter' },
-                { id: 'activity', label: '📋 Log' }
+                { id: 'donations', label: '💝 Donations', rot: '-rotate-[1.5deg]' },
+                { id: 'medications', label: '💊 Meds', rot: 'rotate-[1deg]' },
+                { id: 'bills', label: '📄 Bills', rot: '-rotate-[0.5deg]' },
+                { id: 'copter', label: '🐕 Copter', rot: 'rotate-[1.2deg]' },
+                { id: 'activity', label: '📋 Log', rot: '-rotate-[1deg]' }
               ].map(tab => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex-1 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'hover:bg-gray-100'}`}>
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  className={`rounded-[10px] px-5 py-2 font-hand text-[17px] whitespace-nowrap transition-all ${tab.rot} ${activeTab === tab.id
+                    ? 'bg-[#FFD966] border-2 border-[#3A2E25] text-[#3A2E25] shadow-[2px_3px_0_rgba(58,46,37,0.25)]'
+                    : 'bg-white border-2 border-[#C9B79E] text-[#6E5A42] hover:border-[#3A2E25] hover:text-[#3A2E25]'}`}>
                   {tab.label}
                 </button>
               ))}
+              </div>
             </div>
 
-            {/* Donations summary (shown directly under tabs for quick visibility) */}
-            {activeTab === 'donations' && (
-              <div className="grid grid-cols-3 gap-2 sm:gap-3">
-                {/* Raised — money in */}
-                <div className="rounded-2xl p-3 sm:p-4 text-center bg-emerald-50 border border-emerald-100">
-                  <div className="text-base sm:text-lg leading-none mb-1">💝</div>
-                  <div className="text-base sm:text-2xl font-bold text-emerald-700 leading-tight break-all">฿{donationsTotal.toLocaleString()}</div>
-                  <div className="text-[11px] sm:text-xs font-medium text-emerald-600/80 mt-0.5">Raised</div>
-                </div>
-                {/* Vet Cost — money out */}
-                <div className="rounded-2xl p-3 sm:p-4 text-center bg-amber-50 border border-amber-100">
-                  <div className="text-base sm:text-lg leading-none mb-1">🩺</div>
-                  <div className="text-base sm:text-2xl font-bold text-amber-700 leading-tight break-all">฿{mootooVetCost.toLocaleString()}</div>
-                  <div className="text-[11px] sm:text-xs font-medium text-amber-600/80 mt-0.5">Vet Cost</div>
-                </div>
-                {/* Net result — emphasized */}
-                <div className={`rounded-2xl p-3 sm:p-4 text-center text-white shadow-md ${donationBalance >= 0 ? 'bg-gradient-to-br from-emerald-500 to-green-600' : 'bg-gradient-to-br from-rose-500 to-red-600'}`}>
-                  <div className="text-base sm:text-lg leading-none mb-1">{donationBalance >= 0 ? '🎉' : '⚠️'}</div>
-                  <div className="text-base sm:text-2xl font-bold leading-tight break-all">{donationBalance >= 0 ? '+' : '−'}฿{Math.abs(donationBalance).toLocaleString()}</div>
-                  <div className="text-[11px] sm:text-xs font-semibold opacity-90 mt-0.5">{donationBalance >= 0 ? 'Surplus' : 'Shortfall'}</div>
-                </div>
+            {/* Alert strip — one handwritten sentence */}
+            {alerts.length > 0 && (
+              <div role="status" className="bg-[#FCE8EC] border-2 border-dashed border-[#D2607F] rounded-xl px-5 py-3 flex items-center gap-3.5 -rotate-[0.3deg]">
+                <span className="text-[22px]">🔔</span>
+                <span className="font-hand text-lg text-[#B84A67]">
+                  {'Heads up! ' + alerts.slice(0, 3).map(a => a.dog
+                    ? (a.never ? `${a.dog}'s ${a.med} was never logged`
+                      : a.days < 0 ? `${a.dog}'s ${a.med} is ${Math.abs(a.days)} day${Math.abs(a.days) === 1 ? '' : 's'} overdue`
+                      : a.days === 0 ? `${a.dog}'s ${a.med} is due today`
+                      : `${a.dog}'s ${a.med} is due in ${a.days} day${a.days === 1 ? '' : 's'}`)
+                    : (a.days < 0 ? `"${a.bill || 'a bill'}" is ${Math.abs(a.days)} day${Math.abs(a.days) === 1 ? '' : 's'} overdue`
+                      : a.days === 0 ? `"${a.bill || 'a bill'}" is due today`
+                      : `"${a.bill || 'a bill'}" is due in ${a.days} day${a.days === 1 ? '' : 's'}`)
+                  ).join(' — ') + (alerts.length > 3 ? ` — and ${alerts.length - 3} more.` : '.')}
+                </span>
               </div>
             )}
 
+            {/* Donations: polaroid + recovery fund thermometer */}
+            {activeTab === 'donations' && (() => {
+              const pct = mootooVetCost > 0 ? Math.min(100, Math.round((donationsTotal / mootooVetCost) * 100)) : 0;
+              const remaining = Math.max(0, mootooVetCost - donationsTotal);
+              return (
+                <div className="flex flex-col md:flex-row gap-6 items-stretch">
+                  {/* Polaroid */}
+                  <div className="bg-white border-2 border-[#3A2E25] rounded-md p-3 pb-2.5 -rotate-2 shadow-[4px_5px_0_rgba(58,46,37,0.18)] w-[190px] flex-none flex flex-col gap-2 self-center md:self-auto">
+                    <div className="relative h-[150px] bg-[#EFE3CE] border-[1.5px] border-[#C9B79E] flex items-center justify-center text-[64px] overflow-hidden">
+                      🐶
+                      <img src="mootoo.jpg" alt="Mootoo" className="absolute inset-0 w-full h-full object-cover" onError={e => { e.target.style.display = 'none'; }} />
+                    </div>
+                    <div className="font-hand text-lg text-[#3A2E25] text-center">Mootoo — get well soon!</div>
+                  </div>
+                  {/* Thermometer card with pulsing starburst seal */}
+                  <div className="flex-1 bg-white border-2 border-[#3A2E25] rounded-[14px] px-7 py-[22px] shadow-[4px_5px_0_rgba(58,46,37,0.18)] flex flex-col md:flex-row items-center gap-[26px]">
+                    <div className="flex-1 min-w-0 w-full flex flex-col gap-3.5 justify-center">
+                      <div className="font-hand text-[26px] text-[#3A2E25]">Recovery fund thermometer</div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-[22px]">💝</span>
+                        <div className="flex-1 h-[26px] border-2 border-[#3A2E25] rounded-full bg-white overflow-hidden relative">
+                          <div className="h-full" style={{ width: pct + '%', background: 'repeating-linear-gradient(45deg,#F2A0B5,#F2A0B5 12px,#EE8CA6 12px,#EE8CA6 24px)' }}></div>
+                          {pct > 5 && <span className="absolute top-[2px] text-[15px] font-black text-[#3A2E25]" style={{ left: `calc(${pct}% - 34px)` }}>🐾</span>}
+                        </div>
+                        <span className="text-[22px]">🎯</span>
+                      </div>
+                      <div className="flex flex-wrap justify-between gap-2 text-sm font-extrabold text-[#6E5A42]">
+                        <span>Raised <span className="text-[#2F7A4D] text-lg">฿{donationsTotal.toLocaleString()}</span></span>
+                        <span className="font-hand text-base text-[#B84A67] font-normal">{pct}% there — {pct >= 75 ? 'good dogs!' : 'keep going!'}</span>
+                        <span>Goal <span className="text-[#B84A67] text-lg">฿{mootooVetCost.toLocaleString()}</span></span>
+                      </div>
+                    </div>
+
+                    {/* Hero ask: pulsing starburst seal (neutral until real numbers arrive) */}
+                    <div className="relative w-[190px] h-[190px] flex-none flex items-center justify-center">
+                      <div className={`absolute w-[150px] h-[150px] rounded-full ${mootooVetCost <= 0 ? 'bg-[#EFE3CE]' : donationBalance >= 0 ? 'bg-[#CBE5C0]' : 'bg-[#F2A0B5]'}`} style={{ animation: 'seal-ring 1.8s ease-out infinite' }}></div>
+                      <div className={`absolute w-[150px] h-[150px] rounded-full ${mootooVetCost <= 0 ? 'bg-[#EFE3CE]' : donationBalance >= 0 ? 'bg-[#CBE5C0]' : 'bg-[#F2A0B5]'}`} style={{ animation: 'seal-ring 1.8s ease-out .9s infinite' }}></div>
+                      {/* Star shape pulses on its own layer; text stays static & crisp on top */}
+                      <div
+                        className={`absolute w-[172px] h-[172px] border-[3px] border-[#3A2E25] shadow-[4px_5px_0_rgba(58,46,37,0.28)] ${mootooVetCost <= 0 ? 'bg-[#B5A488]' : donationBalance >= 0 ? 'bg-[#35794C]' : 'bg-[#B23A59]'}`}
+                        style={{
+                          clipPath: 'polygon(50% 0%,61% 12%,76% 6%,79% 23%,95% 25%,90% 41%,100% 50%,90% 59%,95% 75%,79% 77%,76% 94%,61% 88%,50% 100%,39% 88%,24% 94%,21% 77%,5% 75%,10% 59%,0% 50%,10% 41%,5% 25%,21% 23%,24% 6%,39% 12%)',
+                          animation: 'seal-pop 1.8s ease-in-out infinite'
+                        }}>
+                      </div>
+                      <div className="relative flex flex-col items-center justify-center gap-0.5 text-center">
+                          {mootooVetCost <= 0 ? (
+                            <React.Fragment>
+                              <span className="text-[11px] font-black tracking-[.1em] uppercase text-[#F6EFE3]">Recovery fund</span>
+                              <span className="font-hand text-[34px] leading-[.95] text-white">🐾</span>
+                              <span className="font-hand text-[17px] leading-none text-white">loading…</span>
+                              <span className="text-[9px] font-extrabold tracking-[.06em] uppercase text-[#F6EFE3] max-w-[110px] mt-0.5">fetching the latest numbers</span>
+                            </React.Fragment>
+                          ) : donationBalance >= 0 ? (
+                            <React.Fragment>
+                              <span className="text-[11px] font-black tracking-[.1em] uppercase text-[#E9F5E4]">Goal reached</span>
+                              <span className="font-hand text-[34px] leading-[.95] text-white">฿{Math.round(donationBalance).toLocaleString()}</span>
+                              <span className="font-hand text-[17px] leading-none text-white">extra! 🎉</span>
+                              <span className="text-[9px] font-extrabold tracking-[.06em] uppercase text-[#E9F5E4] max-w-[110px] mt-0.5">good dogs, good people</span>
+                            </React.Fragment>
+                          ) : (
+                            <React.Fragment>
+                              <span className="text-[11px] font-black tracking-[.1em] uppercase text-[#FCDCE4]">We still need</span>
+                              <span className="font-hand text-[34px] leading-[.95] text-white">฿{Math.round(remaining).toLocaleString()}</span>
+                              <span className="font-hand text-[17px] leading-none text-white">to go!</span>
+                              <span className="text-[9px] font-extrabold tracking-[.06em] uppercase text-[#FCDCE4] max-w-[110px] mt-0.5">for Mootoo's follow-up care</span>
+                            </React.Fragment>
+                          )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Content */}
-            <div className="bg-white rounded-2xl shadow-sm p-3 sm:p-4">
+            <div className="flex flex-col gap-6">
               {activeTab === 'medications' && (
-                <div className="space-y-4">
+                <div className="flex flex-col gap-6">
+                  {/* Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="font-hand text-[26px] text-[#3A2E25]">🐕 Our dogs</h2>
+                    <div className="flex gap-2.5 flex-wrap">
+                      <button onClick={() => setShowMedSettings(!showMedSettings)} className={UI.btnWhite}>⚙️ med types</button>
+                      <button onClick={addDog} className={UI.btnGreen}>+ add dog</button>
+                    </div>
+                  </div>
+
                   {/* Medication Types Settings */}
-                  <details className="bg-purple-50 rounded-xl" open={showMedSettings}>
-                    <summary className="p-3 font-semibold cursor-pointer flex items-center justify-between" onClick={(e) => { e.preventDefault(); setShowMedSettings(!showMedSettings); }}>
-                      <span>⚙️ Medication Types ({medications.length})</span>
-                      <span className="text-purple-600 text-sm">{showMedSettings ? '▲' : '▼'}</span>
-                    </summary>
-                    {showMedSettings && (
-                      <div className="p-3 pt-0 space-y-3">
+                  {showMedSettings && (
+                      <div className={`${UI.card} p-5 space-y-3`}>
+                        <div className="font-hand text-xl text-[#3A2E25]">⚙️ Medication types ({medications.length})</div>
                         {/* Existing Medications */}
                         <div className="space-y-2">
                           {medications.map(med => (
-                            <div key={med.id} className="flex items-center gap-2 bg-white p-2 rounded-lg">
+                            <div key={med.id} className="flex items-center gap-2 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] p-2 rounded-[10px]">
                               <select
                                 value={med.icon}
                                 onChange={e => updateMedicationType(med.id, 'icon', e.target.value)}
@@ -1277,7 +1405,8 @@
                               </div>
                               <button
                                 onClick={() => removeMedicationType(med.id)}
-                                className="text-red-400 hover:text-red-600 p-2"
+                                aria-label={`Remove medication type ${med.name}`}
+                                className="text-[#B5A488] hover:text-[#B84A67] p-2"
                               >
                                 🗑️
                               </button>
@@ -1286,8 +1415,8 @@
                         </div>
 
                         {/* Add New Medication Type */}
-                        <div className="border-t pt-3">
-                          <p className="text-sm font-medium text-gray-600 mb-2">Add New Type:</p>
+                        <div className="border-t-2 border-dotted border-[#D9CBB4] pt-3">
+                          <p className="font-hand text-base text-[#6E5A42] mb-2">Add a new type:</p>
                           <div className="flex items-center gap-2">
                             <select
                               value={newMed.icon}
@@ -1316,289 +1445,391 @@
                             <button
                               onClick={addMedicationType}
                               disabled={!newMed.name.trim()}
-                              className="px-3 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                              className={`${UI.btnGreen} disabled:opacity-50`}
                             >
                               + Add
                             </button>
                           </div>
                         </div>
                       </div>
-                    )}
-                  </details>
+                  )}
 
-                  <div className="flex justify-between items-center">
-                    <h2 className="font-semibold text-base sm:text-lg">🐕 Dogs</h2>
-                    <button onClick={addDog} className="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium">+ Add</button>
-                  </div>
                   {dogs.length === 0 ? (
-                    <p className="text-center py-8 text-gray-500">No dogs yet</p>
+                    <p className="text-center py-8 font-hand text-xl text-[#B5A488]">No dogs yet — add your first good dog!</p>
                   ) : (
-                    <div className="space-y-4">
-                      {dogs.map(dog => (
-                        <div key={dog.id} className="border rounded-xl p-3 sm:p-4">
-                          <div className="flex justify-between items-center mb-3">
-                            <input defaultValue={dog.name} onBlur={e => updateDogName(dog.id, e.target.value)} className="font-bold text-base sm:text-lg bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none flex-1 mr-2" />
-                            <button onClick={() => removeDog(dog.id)} className="text-red-400 text-sm px-2 py-1">Remove</button>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-[26px] items-start pt-2">
+                      {dogs.map((dog, dogIdx) => {
+                        const worstDays = medications.length ? Math.min(...medications.map(m => getDaysUntilDue(dog[m.id]?.lastGiven, m.interval))) : 1;
+                        const needsMeds = worstDays < 0;
+                        return (
+                        <div key={dog.id} className={`${UI.card} relative px-[26px] py-6 flex flex-col gap-4`}>
+                          <Tape blue={dogIdx % 2 === 1} rot={dogIdx % 2 === 0 ? -2 : 2} />
+                          <div className="flex items-center gap-3.5">
+                            <div className="w-[54px] h-[54px] rounded-full bg-[#EFE3CE] border-2 border-[#3A2E25] flex items-center justify-center text-[28px] flex-none">🐶</div>
+                            <div className="flex-1 min-w-0">
+                              <input defaultValue={dog.name} onBlur={e => updateDogName(dog.id, e.target.value)} className="w-full font-hand text-[27px] leading-none text-[#3A2E25] bg-transparent border-b-2 border-transparent hover:border-[#D9CBB4] focus:border-[#3A2E25] outline-none" />
+                            </div>
+                            {needsMeds ? (
+                              <div className="bg-[#FCE8EC] border-2 border-dashed border-[#D2607F] rounded-lg px-3 py-[3px] font-hand text-[15px] text-[#B84A67] -rotate-2 whitespace-nowrap">needs meds!</div>
+                            ) : (
+                              <div className="bg-[#E9F5E4] border-2 border-dashed border-[#3E8E5A] rounded-lg px-3 py-[3px] font-hand text-[15px] text-[#2F7A4D] rotate-2 whitespace-nowrap">all good ✓</div>
+                            )}
+                            <button onClick={() => removeDog(dog.id)} aria-label={`Remove ${dog.name}`} className="text-[#B5A488] hover:text-[#B84A67] text-sm px-1" title="Remove dog">✕</button>
                           </div>
 
-                          {/* Medication Cards - Stack on mobile */}
-                          <div className="space-y-3">
+                          {/* Medication rows */}
+                          <div className="flex flex-col gap-3">
                             {medications.map(med => {
                               const days = getDaysUntilDue(dog[med.id]?.lastGiven, med.interval);
                               const color = getStatusColor(days);
-                              const bgColor = color === 'red' ? 'bg-red-50 border-red-200' : color === 'yellow' ? 'bg-yellow-50 border-yellow-200' : color === 'green' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200';
-                              const badgeColor = color === 'red' ? 'bg-red-200 text-red-800' : color === 'yellow' ? 'bg-yellow-200 text-yellow-800' : color === 'green' ? 'bg-green-200 text-green-800' : 'bg-gray-200 text-gray-600';
+                              const tint = color === 'red' ? 'bg-[#FDF1F4] border-[#F0B9C6]' : color === 'yellow' ? 'bg-[#FDF8EA] border-[#F2DFA9]' : color === 'green' ? 'bg-[#F4FAF1] border-[#CBE5C0]' : 'bg-[#FBF8F0] border-[#D9CBB4]';
+                              const pillBg = color === 'red' ? 'bg-[#B23A59]' : color === 'yellow' ? 'bg-[#E0A93E] !text-[#3A2E25]' : color === 'green' ? 'bg-[#35794C]' : 'bg-[#B5A488] !text-[#3A2E25]';
+                              const pillText = days === -999 ? 'never given' : days < 0 ? `${Math.abs(days)}d overdue!` : days === 0 ? 'due today!' : days <= 7 ? `due in ${days}d` : `${days}d left`;
 
                               return (
-                                <div key={med.id} className={`p-3 sm:p-4 rounded-xl border-2 ${bgColor}`}>
-                                  <div className="flex justify-between items-center mb-3">
-                                    <div>
-                                      <span className="font-semibold text-base">{med.icon} {med.name}</span>
-                                      <span className="text-xs text-gray-500 ml-2">({med.interval}d)</span>
-                                    </div>
-                                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${badgeColor}`}>
-                                      {days === -999 ? 'Never given' : days < 0 ? `${Math.abs(days)}d overdue` : days === 0 ? 'Due today!' : `${days}d left`}
-                                    </span>
+                                <div key={med.id} className={`border-2 rounded-[10px] px-4 py-3.5 flex flex-col gap-2.5 ${tint}`}>
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-extrabold text-[15px] text-[#3A2E25]">{med.icon} {med.name} <span className="text-[11.5px] text-[#857055] font-semibold">every {med.interval} days</span></span>
+                                    <span className={`${UI.pill} ${pillBg}`}>{pillText}</span>
                                   </div>
-
-                                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                                    <div className="flex items-center gap-2 flex-1">
-                                      <span className="text-sm text-gray-600">Last given:</span>
+                                  <div className="flex flex-wrap items-center gap-2.5">
+                                    <span className="text-[12.5px] text-[#6E5A42] font-bold flex-1 flex items-center gap-1.5 flex-wrap min-w-0">
+                                      last given
                                       <input
                                         type="date"
                                         value={dog[med.id]?.lastGiven || ''}
                                         onChange={e => updateMedicationDate(dog.id, med.id, e.target.value)}
-                                        className="flex-1 text-sm border rounded-lg px-3 py-2 bg-white"
+                                        className="text-[12.5px] font-bold text-[#5C4E3E] bg-transparent border-b-[1.5px] border-dotted border-[#C9B79E] hover:border-[#3A2E25] focus:border-[#3A2E25] outline-none px-1"
                                       />
-                                    </div>
+                                      {dog[med.id]?.givenBy && <span className="font-hand text-[15px] font-normal">by {dog[med.id].givenBy} ✍️</span>}
+                                    </span>
                                     <button
                                       onClick={() => giveMedication(dog.id, med.id)}
-                                      className="w-full sm:w-auto px-4 py-2.5 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800"
+                                      className={days < 0 && days !== -999
+                                        ? 'bg-[#B23A59] hover:bg-[#9C3350] border-2 border-[#3A2E25] text-white rounded-lg px-3.5 py-1.5 font-hand text-[15px] shadow-[2px_2px_0_rgba(58,46,37,0.25)] transition-all'
+                                        : UI.btnSmall}
                                     >
-                                      ✓ Give Today
+                                      ✓ give today
                                     </button>
                                   </div>
-                                  {dog[med.id]?.givenBy && (
-                                    <p className="text-xs text-gray-400 mt-2">by {dog[med.id].givenBy}</p>
-                                  )}
                                 </div>
                               );
                             })}
                           </div>
                         </div>
-                      ))}
+                      );})}
                     </div>
                   )}
                 </div>
               )}
 
               {activeTab === 'bills' && (
-                <div className="space-y-4">
-                  {/* Company Info - Collapsible on mobile */}
-                  <details className="bg-gray-50 rounded-xl">
-                    <summary className="p-3 font-semibold cursor-pointer">🏢 Company Info</summary>
-                    <div className="p-3 pt-0 space-y-2">
-                      <input placeholder="Company Name" value={companyInfo.name} onChange={e => setCompanyInfo({...companyInfo, name: e.target.value})} className="w-full p-3 border rounded-lg text-sm" />
-                      <input placeholder="Address" value={companyInfo.address} onChange={e => setCompanyInfo({...companyInfo, address: e.target.value})} className="w-full p-3 border rounded-lg text-sm" />
-                      <input placeholder="Email" value={companyInfo.email} onChange={e => setCompanyInfo({...companyInfo, email: e.target.value})} className="w-full p-3 border rounded-lg text-sm" />
-                    </div>
-                  </details>
-
-                  <div className="flex justify-between items-center flex-wrap gap-2">
-                    <h3 className="font-semibold">📄 Bills</h3>
-                    <div className="flex gap-2 flex-wrap">
-                      <button onClick={() => { if (!userName) { setShowNamePrompt(true); return; } setShowScanner(true); }} className="px-3 py-2 bg-purple-600 text-white rounded-lg text-sm">📷 Scan</button>
+                <div className="flex flex-col gap-6">
+                  {/* Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="font-hand text-[26px] text-[#3A2E25]">📄 Bills to settle</h2>
+                    <div className="flex gap-2.5 flex-wrap">
+                      <button onClick={() => { if (!userName) { setShowNamePrompt(true); return; } setShowScanner(true); }} className={UI.btnWhite}>📷 scan invoice</button>
                       <button onClick={() => {
                         const unpaid = bills.filter(b => !b.paid);
                         if (!unpaid.length) { alert('No unpaid bills!'); return; }
                         generateCashAdvanceForm(unpaid.map(b => ({description: b.description, amount: parseFloat(b.amount) || 0})));
-                      }} className="px-3 py-2 bg-blue-600 text-white rounded-lg text-sm">📋 Cash Advance</button>
-                      <button onClick={generateInvoice} className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm">📄 Invoice</button>
+                      }} className={UI.btnWhite}>📋 cash advance</button>
+                      <button onClick={generateInvoice} className={UI.btnWhite}>🧾 invoice</button>
+                      <button onClick={addBill} className={UI.btnGreen}>+ add bill</button>
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    {bills.map(b => (
-                      <div key={b.id} className={`p-3 rounded-xl border ${b.paid ? 'bg-gray-50' : 'bg-white'}`}>
-                        <div className="flex items-start gap-3">
-                          <button onClick={() => toggleBillPaid(b.id)} className={`w-7 h-7 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-1 ${b.paid ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>
-                            {b.paid && '✓'}
-                          </button>
-                          <div className="flex-1 min-w-0">
-                            <input
-                              value={b.description}
-                              placeholder="Description"
-                              onChange={e => updateBill(b.id, 'description', e.target.value)}
-                              className={`w-full bg-transparent outline-none text-base mb-2 ${b.paid ? 'line-through text-gray-400' : ''}`}
-                            />
-                            <div className="flex flex-wrap gap-2 items-center">
-                              <div className="flex items-center gap-1">
-                                <span className="text-gray-400">฿</span>
-                                <input
-                                  type="number"
-                                  value={b.amount}
-                                  placeholder="0"
-                                  onChange={e => updateBill(b.id, 'amount', e.target.value)}
-                                  className={`w-24 bg-transparent outline-none font-medium ${b.paid ? 'line-through text-gray-400' : ''}`}
-                                />
-                              </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-[26px] items-start">
+                    {/* Checklist card */}
+                    <div className={`${UI.card} untilt-focus px-[26px] py-6 flex flex-col gap-1`}>
+                      {bills.length === 0 && <p className="text-center py-6 font-hand text-xl text-[#B5A488]">Nothing to settle — good dogs, good books!</p>}
+                      <div className="divide-y-2 divide-dotted divide-[#D9CBB4]">
+                        {bills.map(b => (
+                          <div key={b.id} className="flex items-center gap-3 py-3 px-0.5">
+                            <button onClick={() => toggleBillPaid(b.id)} style={{ minHeight: '28px' }}
+                              aria-label={b.paid ? `Mark "${b.description || 'bill'}" as unpaid` : `Mark "${b.description || 'bill'}" as paid`}
+                              className={`w-7 h-7 rounded-lg border-2 flex items-center justify-center flex-none font-black ${b.paid ? 'bg-[#35794C] border-[#35794C] text-white' : 'bg-white border-[#3A2E25] hover:bg-[#F6EFE3]'}`}>
+                              {b.paid && '✓'}
+                            </button>
+                            <div className="flex-1 min-w-0">
                               <input
-                                type="date"
-                                value={b.dueDate}
-                                onChange={e => updateBill(b.id, 'dueDate', e.target.value)}
-                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
+                                value={b.description}
+                                placeholder="Description"
+                                onChange={e => updateBill(b.id, 'description', e.target.value)}
+                                className={`w-full bg-transparent outline-none font-extrabold text-[15px] ${b.paid ? 'line-through text-[#B5A488]' : 'text-[#3A2E25]'}`}
+                              />
+                              <div className={`flex flex-wrap gap-1.5 items-center text-xs font-bold ${b.paid ? 'text-[#C9B79E]' : 'text-[#857055]'}`}>
+                                <span>{b.paid ? 'paid ✓ ·' : 'due'}</span>
+                                <input
+                                  type="date"
+                                  value={b.dueDate}
+                                  onChange={e => updateBill(b.id, 'dueDate', e.target.value)}
+                                  style={{ minHeight: '28px' }}
+                                  className="text-xs font-bold text-inherit bg-transparent border-b-[1.5px] border-dotted border-[#C9B79E] hover:border-[#3A2E25] focus:border-[#3A2E25] outline-none"
+                                />
+                                {getInvoiceImage(b) && (
+                                  <button onClick={() => setViewingInvoiceImage(getInvoiceImage(b))} style={{ minHeight: '28px' }} className="text-[#B98A4A] hover:underline font-bold" title="View Invoice">· scanned 🖼️</button>
+                                )}
+                              </div>
+                            </div>
+                            <div className={`flex items-center font-hand text-xl ${b.paid ? 'text-[#B5A488] line-through' : 'text-[#B84A67]'}`}>
+                              ฿<input
+                                type="number"
+                                value={b.amount}
+                                placeholder="0"
+                                onChange={e => updateBill(b.id, 'amount', e.target.value)}
+                                className="w-24 bg-transparent outline-none font-hand text-xl text-inherit"
                               />
                             </div>
+                            <button onClick={() => removeBill(b.id)} aria-label={`Remove bill ${b.description || ''}`} className="text-[#B5A488] hover:text-[#B84A67] px-1" title="Remove bill">🗑️</button>
                           </div>
-                          <div className="flex flex-col gap-1">
-                            {getInvoiceImage(b) && (
-                              <button onClick={() => setViewingInvoiceImage(getInvoiceImage(b))} className="text-blue-500 p-2 hover:bg-blue-50 rounded" title="View Invoice">🖼️</button>
-                            )}
-                            <button onClick={() => removeBill(b.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
-                          </div>
-                        </div>
+                        ))}
                       </div>
-                    ))}
-                    <button onClick={addBill} className="w-full py-4 border-2 border-dashed rounded-xl text-gray-400 text-sm">+ Add Bill</button>
+                      <button onClick={addBill} className="mt-2.5 bg-[#FBF8F0] border-2 border-dashed border-[#C9B79E] text-[#6E5A42] hover:border-[#3A2E25] hover:text-[#3A2E25] rounded-[10px] p-3 font-hand text-base transition-all">+ add a bill</button>
+                    </div>
+
+                    {/* Right rail */}
+                    <div className="flex flex-col gap-5">
+                      {/* Sticky note summary */}
+                      <div className="bg-[#FFF3B8] border border-[#E3D07A] rounded p-6 shadow-[4px_5px_0_rgba(58,46,37,0.15)] rotate-[1.2deg] flex flex-col gap-2">
+                        <div className="font-hand text-[22px] text-[#3A2E25] border-b-2 border-dotted border-[#D9C265] pb-1.5">This month 📌</div>
+                        <div className="flex justify-between font-hand text-lg text-[#5C4E3E]"><span>unpaid</span><span className="text-[#B84A67]">฿{unpaidTotal.toLocaleString()}</span></div>
+                        <div className="flex justify-between font-hand text-lg text-[#5C4E3E]"><span>paid</span><span className="text-[#2F7A4D]">฿{paidTotal.toLocaleString()}</span></div>
+                        <div className="flex justify-between font-hand text-lg text-[#5C4E3E]"><span>bills</span><span>{bills.length}</span></div>
+                        <div className="font-hand text-sm text-[#6E5A42] pt-1">→ cash advance form covers the unpaid ones</div>
+                      </div>
+
+                      {/* Scanner card */}
+                      <div className={`${UI.card} px-6 py-5 flex flex-col gap-2`}>
+                        <div className="font-hand text-xl text-[#3A2E25]">📷 Scan a Thai invoice</div>
+                        <div className="text-[12.5px] text-[#6E5A42] font-bold leading-relaxed">Drop a photo — OCR pulls the line items, you tick which ones become bills, then it offers the cash advance form.</div>
+                        <button onClick={() => { if (!userName) { setShowNamePrompt(true); return; } setShowScanner(true); }} className="border-2 border-dashed border-[#C9B79E] hover:border-[#3A2E25] rounded-[10px] p-[18px] flex items-center justify-center gap-2.5 font-hand text-base text-[#B5A488] hover:text-[#3A2E25] bg-transparent transition-all">🖼️ add a photo here</button>
+                      </div>
+
+                      {/* Company Info */}
+                      <details className={`${UI.card} untilt-focus overflow-hidden`}>
+                        <summary className="px-5 py-3 font-hand text-lg text-[#3A2E25] cursor-pointer">🏢 Company info</summary>
+                        <div className="px-5 pb-4 space-y-2">
+                          <input placeholder="Company Name" value={companyInfo.name} onChange={e => setCompanyInfo({...companyInfo, name: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px] text-sm" />
+                          <input placeholder="Address" value={companyInfo.address} onChange={e => setCompanyInfo({...companyInfo, address: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px] text-sm" />
+                          <input placeholder="Email" value={companyInfo.email} onChange={e => setCompanyInfo({...companyInfo, email: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px] text-sm" />
+                        </div>
+                      </details>
+                    </div>
                   </div>
                 </div>
               )}
 
               {activeTab === 'donations' && (
-                <div className="space-y-4">
-                  <div className="bg-pink-50 rounded-xl p-3 text-sm text-pink-800">
-                    💝 Donations toward Mootoo's vet costs. Each entry syncs to the spreadsheet automatically.
-                  </div>
+                <React.Fragment>
+                {/* Mootoo's update card */}
+                {(() => {
+                  const sorted = [...updates].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.id - a.id);
+                  const latest = sorted[0];
+                  const older = sorted.slice(1);
+                  const st = UPDATE_STATUSES[latest && latest.status] || UPDATE_STATUSES.recovering;
+                  return (
+                    <div className={`${UI.card} untilt-focus relative px-[26px] py-[22px] flex flex-col md:flex-row gap-6 items-start`}>
+                      <div style={{ position: 'absolute', top: -13, left: 36, transform: 'rotate(-2deg)', background: 'rgba(178,216,247,.85)', border: '1px solid rgba(58,46,37,.2)', width: 110, height: 26, borderRadius: 3 }}></div>
 
-                  <div className="bg-rose-50 rounded-xl p-3 space-y-2">
-                    <div className="flex justify-between items-center">
-                      <label className="block text-sm font-semibold text-rose-800">🐕 Mootoo Vet Costs</label>
-                      <span className="text-sm font-bold text-rose-700">฿{mootooVetCost.toLocaleString()}</span>
-                    </div>
-                    {vetCosts.map(v => (
-                      <div key={v.id} className="p-2.5 rounded-lg border bg-white">
-                        <div className="flex items-start gap-2">
-                          <div className="flex-1 min-w-0">
-                            <input
-                              value={v.description}
-                              placeholder="What was it for?"
-                              onChange={e => updateVetCost(v.id, 'description', e.target.value)}
-                              className="w-full bg-transparent outline-none text-base mb-2"
-                            />
-                            <div className="flex flex-wrap gap-2 items-center">
-                              <div className="flex items-center gap-1">
-                                <span className="text-gray-400">฿</span>
-                                <input
-                                  type="number"
-                                  value={v.amount}
-                                  placeholder="0"
-                                  onChange={e => updateVetCost(v.id, 'amount', e.target.value)}
-                                  className="w-24 bg-transparent outline-none font-medium text-rose-600"
-                                />
+                      {/* Left: title + condition sticker */}
+                      <div className="flex-none flex flex-col items-center gap-2 w-full md:w-[150px]">
+                        <span className="font-hand text-[22px] text-[#3A2E25]">How's Mootoo?</span>
+                        {latest ? (
+                          <div className="rounded-[10px] px-4 py-1.5 -rotate-[1.5deg] text-center border-2 border-dashed" style={{ background: st.bg, borderColor: st.border }}>
+                            <div className="font-hand text-xl leading-none" style={{ color: st.text }}>{st.label}</div>
+                            <div className="text-[10px] font-extrabold tracking-[.06em] uppercase mt-0.5" style={{ color: st.text }}>since {formatDate(latest.date)}</div>
+                          </div>
+                        ) : (
+                          <div className="rounded-[10px] px-4 py-1.5 -rotate-[1.5deg] text-center border-2 border-dashed bg-[#FBF8F0] border-[#C9B79E]">
+                            <div className="font-hand text-xl leading-none text-[#6E5A42]">No news yet 🐾</div>
+                          </div>
+                        )}
+                        {latest && (
+                          <select value={latest.status} onChange={e => updateUpdate(latest.id, 'status', e.target.value)} aria-label="Set Mootoo's condition"
+                            className="font-hand text-sm text-[#B98A4A] bg-transparent border-b-[1.5px] border-dotted border-[#C9B79E] hover:border-[#3A2E25] focus:border-[#3A2E25] outline-none cursor-pointer" style={{ minHeight: '28px' }}>
+                            <option value="recovering">recovering</option>
+                            <option value="care">under care</option>
+                            <option value="critical">critical</option>
+                            <option value="healthy">healthy</option>
+                          </select>
+                        )}
+                      </div>
+
+                      {/* Right: latest update + condensed history */}
+                      <div className="flex-1 min-w-0 w-full flex flex-col gap-2.5">
+                        {latest ? (
+                          <div className="flex gap-3 items-start">
+                            <select value={UPDATE_ICONS.includes(latest.icon) ? latest.icon : UPDATE_ICONS[0]} onChange={e => updateUpdate(latest.id, 'icon', e.target.value)} aria-label="Update icon"
+                              className="flex-none w-[38px] h-[38px] rounded-full text-center text-[15px] appearance-none cursor-pointer outline-none border-2 pl-[7px]"
+                              style={{ background: st.bg, borderColor: st.border, minHeight: '38px' }}>
+                              {UPDATE_ICONS.map(ic => <option key={ic} value={ic}>{ic}</option>)}
+                            </select>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-baseline gap-2 flex-wrap">
+                                <input value={latest.title} placeholder="What's new?" onChange={e => updateUpdate(latest.id, 'title', e.target.value)}
+                                  className="flex-1 min-w-[140px] bg-transparent outline-none font-black text-sm text-[#3A2E25]" />
+                                <span className="font-hand text-sm text-[#B98A4A] whitespace-nowrap">— {formatDate(latest.date)}, by {latest.author || '?'}</span>
+                                <button onClick={() => removeUpdate(latest.id)} aria-label="Remove this update" title="Remove update" className="text-[#B5A488] hover:text-[#B84A67] text-xs px-1" style={{ minHeight: '24px' }}>✕</button>
                               </div>
-                              <input
-                                type="date"
-                                value={v.date}
-                                onChange={e => updateVetCost(v.id, 'date', e.target.value)}
-                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
-                              />
+                              <input value={latest.note} placeholder="add a detail — how is she doing?" onChange={e => updateUpdate(latest.id, 'note', e.target.value)}
+                                className="w-full bg-transparent outline-none text-[12.5px] text-[#6E5A42] font-semibold leading-relaxed" />
                             </div>
                           </div>
-                          <button onClick={() => removeVetCost(v.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
+                        ) : (
+                          <p className="font-hand text-lg text-[#B5A488] pt-1">Share how Mootoo is doing — donors will see the story here.</p>
+                        )}
+                        <div className={`flex flex-col gap-1.5 ${sorted.length ? 'border-t-2 border-dotted border-[#D9CBB4] pt-2.5' : ''}`}>
+                          {older.map(u => (
+                            <div key={u.id} className="flex gap-2.5 items-baseline">
+                              <span className="text-sm flex-none">{u.icon || '🐾'}</span>
+                              <span className="font-hand text-sm text-[#B98A4A] flex-none">{formatDate(u.date)}</span>
+                              <span className="flex-1 min-w-0 text-[12.5px] text-[#6E5A42] font-bold truncate">{u.title || u.note || '…'}</span>
+                              <button onClick={() => removeUpdate(u.id)} aria-label={`Remove update ${u.title || ''}`} title="Remove update" className="text-[#B5A488] hover:text-[#B84A67] text-xs px-1" style={{ minHeight: '20px' }}>✕</button>
+                            </div>
+                          ))}
+                          <button onClick={addUpdate} className="self-start font-hand text-sm text-[#2F7A4D] hover:underline bg-transparent px-0" style={{ minHeight: '28px' }}>+ add an update</button>
                         </div>
                       </div>
-                    ))}
-                    <button onClick={addVetCost} className="w-full py-3 border-2 border-dashed border-rose-200 rounded-xl text-rose-400 text-sm">+ Add Vet Cost</button>
-                  </div>
+                    </div>
+                  );
+                })()}
 
-                  {/* Read-only itemized cost breakdown (collapsible) */}
-                  {(() => {
-                    const b = VET_COST_BREAKDOWN;
-                    const sub = b.items.reduce((s, i) => s + i.amount, 0);
-                    const vat = sub * b.vatRate / 100;
-                    const total = sub + vat;
-                    const m = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                    return (
-                      <details className="bg-white border border-rose-100 rounded-xl overflow-hidden">
-                        <summary className="p-3 cursor-pointer flex items-center justify-between gap-2">
-                          <span className="font-semibold text-rose-800">🧾 Cost Breakdown</span>
-                          <span className="font-bold text-rose-700">฿{m(total)}</span>
-                        </summary>
-                        <div className="px-3 pb-3">
-                          <p className="text-xs text-gray-400 mb-2">{b.title} · {b.subtitle}</p>
-                          <div className="space-y-1">
-                            {b.items.map((it, idx) => (
-                              <div key={idx} className="flex items-center justify-between text-sm">
-                                <span className="flex items-center gap-2 text-gray-700"><span className="w-5 text-center">{it.icon}</span>{it.label}</span>
-                                <span className="text-gray-600">฿{m(it.amount)}</span>
-                              </div>
-                            ))}
-                          </div>
-                          <div className="border-t border-rose-100 mt-2 pt-2 text-sm space-y-0.5">
-                            <div className="flex justify-between text-gray-500"><span>Subtotal</span><span>฿{m(sub)}</span></div>
-                            <div className="flex justify-between text-gray-500"><span>VAT {b.vatRate}%</span><span>฿{m(vat)}</span></div>
-                            <div className="flex justify-between font-bold text-rose-700"><span>Total</span><span>฿{m(total)}</span></div>
-                          </div>
-                        </div>
-                      </details>
-                    );
-                  })()}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-[26px] items-start pt-2">
 
-                  <div className="flex justify-between items-center flex-wrap gap-2">
-                    <h3 className="font-semibold">💝 Donations</h3>
-                  </div>
-
-                  <div className="space-y-2">
-                    {donations.slice().reverse().map(d => (
-                      <div key={d.id} className="p-3 rounded-xl border bg-white">
-                        <div className="flex items-start gap-3">
-                          <div className="w-7 h-7 rounded-full bg-pink-100 flex items-center justify-center flex-shrink-0 mt-1">💝</div>
+                  {/* 💝 Money in */}
+                  <div className={`${UI.card} untilt-focus relative px-[26px] py-6 flex flex-col gap-3`}>
+                    <Tape rot={-2} />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-hand text-2xl text-[#3A2E25]">💝 Money in</span>
+                      <button onClick={addDonation} className={UI.btnGreen}>+ add donation</button>
+                    </div>
+                    {donations.length === 0 && <p className="text-center py-4 font-hand text-lg text-[#B5A488]">No donations yet — every baht helps!</p>}
+                    <div className="divide-y-2 divide-dotted divide-[#D9CBB4]">
+                      {donations.slice().reverse().map(d => (
+                        <div key={d.id} className="flex items-center gap-2.5 py-[9px] px-0.5">
+                          <span className="text-[17px] flex-none">🐾</span>
                           <div className="flex-1 min-w-0">
                             <input
                               value={d.donor}
                               placeholder="Donor name"
                               onChange={e => updateDonation(d.id, 'donor', e.target.value)}
-                              className="w-full bg-transparent outline-none text-base mb-2"
+                              className="w-full bg-transparent outline-none font-extrabold text-[14.5px] text-[#3A2E25]"
                             />
-                            <div className="flex flex-wrap gap-2 items-center">
-                              <div className="flex items-center gap-1">
-                                <span className="text-gray-400">฿</span>
-                                <input
-                                  type="number"
-                                  value={d.amount}
-                                  placeholder="0"
-                                  onChange={e => updateDonation(d.id, 'amount', e.target.value)}
-                                  className="w-24 bg-transparent outline-none font-medium text-green-600"
-                                />
-                              </div>
-                              <input
-                                type="date"
-                                value={d.date}
-                                onChange={e => updateDonation(d.id, 'date', e.target.value)}
-                                className="text-sm text-gray-500 bg-transparent border rounded px-2 py-1"
-                              />
-                            </div>
+                            <input
+                              type="date"
+                              value={d.date}
+                              onChange={e => updateDonation(d.id, 'date', e.target.value)}
+                              style={{ minHeight: '24px' }}
+                              className="text-[11.5px] text-[#857055] font-semibold bg-transparent border-b-[1.5px] border-dotted border-transparent hover:border-[#C9B79E] focus:border-[#3A2E25] outline-none"
+                            />
                           </div>
-                          <button onClick={() => removeDonation(d.id)} className="text-red-400 p-2 hover:bg-red-50 rounded">🗑️</button>
+                          <div className="flex items-center font-hand text-[19px] text-[#2F7A4D]">
+                            ฿<input
+                              type="number"
+                              value={d.amount}
+                              placeholder="0"
+                              onChange={e => updateDonation(d.id, 'amount', e.target.value)}
+                              className="w-20 bg-transparent outline-none font-hand text-[19px] text-inherit"
+                            />
+                          </div>
+                          <button onClick={() => removeDonation(d.id)} aria-label={`Remove donation from ${d.donor || 'donor'}`} className="text-[#B5A488] hover:text-[#B84A67] px-1" title="Remove donation">🗑️</button>
                         </div>
-                      </div>
-                    ))}
-                    <button onClick={addDonation} className="w-full py-4 border-2 border-dashed rounded-xl text-gray-400 text-sm">+ Add Donation</button>
+                      ))}
+                    </div>
+                    <div className="flex justify-between items-baseline pt-1 border-t-2 border-dotted border-[#D9CBB4]">
+                      <span className="font-hand text-[15px] text-[#B98A4A]">{donations.length} donation{donations.length === 1 ? '' : 's'} 🐾</span>
+                      <span className="font-hand text-xl text-[#3A2E25]">total <span className="text-[#2F7A4D]">฿{donationsTotal.toLocaleString()}</span></span>
+                    </div>
+                  </div>
+
+                  {/* 🩺 Money out */}
+                  <div className={`${UI.card} relative px-[26px] py-6 flex flex-col gap-3`}>
+                    <Tape blue rot={2} />
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-hand text-2xl text-[#3A2E25]">🩺 Money out</span>
+                      <button onClick={addVetCost} className="bg-white hover:bg-[#FCE8EC] border-2 border-[#3A2E25] text-[#B84A67] rounded-[10px] px-4 py-[7px] font-hand text-base shadow-[2px_2px_0_rgba(58,46,37,0.3)] transition-all">+ add cost</button>
+                    </div>
+                    {vetCosts.length === 0 && <p className="text-center py-4 font-hand text-lg text-[#B5A488]">No vet costs logged yet.</p>}
+                    <div className="divide-y-2 divide-dotted divide-[#D9CBB4]">
+                      {vetCosts.map(v => (
+                        <div key={v.id} className="flex items-center gap-2.5 py-[9px] px-0.5">
+                          <span className="text-[17px] flex-none">🏥</span>
+                          <div className="flex-1 min-w-0">
+                            <input
+                              value={v.description}
+                              placeholder="What was it for?"
+                              onChange={e => updateVetCost(v.id, 'description', e.target.value)}
+                              className="w-full bg-transparent outline-none font-extrabold text-[14.5px] text-[#3A2E25]"
+                            />
+                            <input
+                              type="date"
+                              value={v.date}
+                              onChange={e => updateVetCost(v.id, 'date', e.target.value)}
+                              style={{ minHeight: '24px' }}
+                              className="text-[11.5px] text-[#857055] font-semibold bg-transparent border-b-[1.5px] border-dotted border-transparent hover:border-[#C9B79E] focus:border-[#3A2E25] outline-none"
+                            />
+                          </div>
+                          <div className="flex items-center font-hand text-[19px] text-[#B84A67]">
+                            ฿<input
+                              type="number"
+                              value={v.amount}
+                              placeholder="0"
+                              onChange={e => updateVetCost(v.id, 'amount', e.target.value)}
+                              className="w-24 bg-transparent outline-none font-hand text-[19px] text-inherit"
+                            />
+                          </div>
+                          <button onClick={() => removeVetCost(v.id)} aria-label={`Remove vet cost ${v.description || ''}`} className="text-[#B5A488] hover:text-[#B84A67] px-1" title="Remove vet cost">🗑️</button>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Receipt-style read-only breakdown */}
+                    {(() => {
+                      const b = VET_COST_BREAKDOWN;
+                      const sub = b.items.reduce((s, i) => s + i.amount, 0);
+                      const vat = sub * b.vatRate / 100;
+                      const total = sub + vat;
+                      const m = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      const shown = b.items.slice(0, 5);
+                      const rest = b.items.slice(5);
+                      const restSum = rest.reduce((s, i) => s + i.amount, 0);
+                      return (
+                        <div className="bg-[#FBF8F0] border-[1.5px] border-dashed border-[#C9B79E] rounded p-4 mt-1 font-mono">
+                          <div className="text-center text-xs font-bold text-[#6E5A42] tracking-[.14em] uppercase border-b-[1.5px] border-dashed border-[#C9B79E] pb-2 mb-2">— Receipt FP-RI 01/66 —</div>
+                          {shown.map((it, idx) => (
+                            <div key={idx} className="flex justify-between gap-2 text-xs text-[#5C4E3E] py-[2.5px]"><span className="uppercase">{it.label}</span><span>{m(it.amount)}</span></div>
+                          ))}
+                          {rest.length > 0 && (
+                            <div className="flex justify-between gap-2 text-xs text-[#5C4E3E] py-[2.5px]"><span className="uppercase">{rest[0].label} + {rest.length - 1} more</span><span>{m(restSum)}</span></div>
+                          )}
+                          <div className="border-t-[1.5px] border-dashed border-[#C9B79E] mt-1.5 pt-1.5">
+                            <div className="flex justify-between text-xs text-[#6E5A42] py-0.5"><span>SUBTOTAL</span><span>{m(sub)}</span></div>
+                            <div className="flex justify-between text-xs text-[#6E5A42] py-0.5"><span>VAT {b.vatRate}%</span><span>{m(vat)}</span></div>
+                            <div className="flex justify-between text-sm font-extrabold text-[#3A2E25] py-[3px]"><span>TOTAL</span><span>฿{m(total)}</span></div>
+                          </div>
+                          <div className="text-center text-[11px] text-[#B5A488] pt-1.5">*** THANK YOU · GET WELL MOOTOO ***</div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
+                </React.Fragment>
               )}
 
               {activeTab === 'activity' && (
-                <div>
-                  <h3 className="font-semibold mb-3">📋 Activity</h3>
-                  {activityLog.length === 0 ? <p className="text-center py-8 text-gray-500">No activity</p> : (
-                    <div className="space-y-2">
+                <div className={`${UI.card} relative px-[26px] py-6`}>
+                  <Tape rot={-2} />
+                  <h3 className="font-hand text-[26px] text-[#3A2E25] mb-3">📋 Activity log</h3>
+                  {activityLog.length === 0 ? <p className="text-center py-8 font-hand text-xl text-[#B5A488]">No activity yet</p> : (
+                    <div className="divide-y-2 divide-dotted divide-[#D9CBB4]">
                       {[...activityLog].reverse().slice(0, 20).map((log, i) => (
-                        <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
-                          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-sm flex-shrink-0">{log.user?.[0]?.toUpperCase()}</div>
+                        <div key={i} className="flex items-center gap-3 py-2.5">
+                          <div className="w-8 h-8 bg-[#EFE3CE] border-2 border-[#3A2E25] rounded-full flex items-center justify-center text-sm font-black text-[#3A2E25] flex-shrink-0">{log.user?.[0]?.toUpperCase()}</div>
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm truncate"><b>{log.user}</b> {log.action} {log.details}</p>
-                            <p className="text-xs text-gray-400">{new Date(log.time).toLocaleString('th-TH')}</p>
+                            <p className="text-sm truncate text-[#5C4E3E]"><b className="text-[#3A2E25]">{log.user}</b> {log.action} {log.details}</p>
+                            <p className="text-xs text-[#857055] font-semibold">{new Date(log.time).toLocaleString('th-TH')}</p>
                           </div>
                         </div>
                       ))}
@@ -1608,25 +1839,33 @@
               )}
 
               {activeTab === 'copter' && (
-                <div>
+                <div className={`${UI.card} relative px-[26px] py-6`}>
+                  <Tape blue rot={2} />
                   <div className="flex justify-between items-center mb-3">
-                    <h3 className="font-semibold">🐕 Copter - Historical Expenses</h3>
-                    <span className="text-xs text-gray-400">Read-only</span>
+                    <h3 className="font-hand text-[26px] text-[#3A2E25]">🐕 Copter — historical expenses</h3>
+                    <span className="font-hand text-sm text-[#B5A488] rotate-[1deg]">read-only</span>
                   </div>
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-sm text-amber-700">
+                  <div className="bg-[#FDF8EA] border-2 border-dashed border-[#F2DFA9] rounded-xl p-3 mb-4 font-hand text-base text-[#6E5A42]">
                     🕊️ In memory of Copter. These records are preserved from the original expense tracking sheet.
                   </div>
 
                   {copterLoading ? (
                     <div className="text-center py-8">
                       <div className="text-4xl pulse mb-4">🐾</div>
-                      <p className="text-gray-500">Loading Copter's records...</p>
+                      <p className="font-hand text-lg text-[#857055]">Loading Copter's records…</p>
                     </div>
                   ) : copterData.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                      <p>No data loaded yet.</p>
-                      <button onClick={loadCopterData} className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">
-                        Load from Sheet
+                    <div className="text-center py-8 text-[#857055]">
+                      <p className="font-hand text-lg">No data loaded yet.</p>
+                      {window.location.protocol === 'file:' && (
+                        <p className="text-sm font-semibold max-w-md mx-auto mt-2 mb-1">
+                          ⚠️ Copter's history can't load when the app is opened as a local file — Google blocks
+                          this data for pages without a website address. Open the deployed site instead
+                          (everything else still works locally).
+                        </p>
+                      )}
+                      <button onClick={loadCopterData} className={`mt-2 ${UI.btnGreen}`}>
+                        🔄 load from sheet
                       </button>
                     </div>
                   ) : (() => {
@@ -1637,22 +1876,22 @@
                     const totalFunds = copterData.find(r => r.Date === 'Total Funds');
                     return (
                       <div className="space-y-4">
-                        {/* Summary Cards */}
+                        {/* Summary — ledger note */}
                         {totalRow && (
-                          <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl p-4">
-                            <h4 className="font-semibold mb-3 text-center">Copter Expense Summary</h4>
+                          <div className="bg-[#FBF8F0] border-[1.5px] border-dashed border-[#C9B79E] rounded p-4">
+                            <h4 className="font-hand text-xl text-[#3A2E25] mb-3 text-center">Copter — expense summary</h4>
                             <div className="grid grid-cols-3 text-center gap-2">
                               <div>
-                                <div className="text-lg sm:text-xl font-bold">฿{Number(totalRow.Cost || 0).toLocaleString()}</div>
-                                <div className="text-xs opacity-80">Total Cost</div>
+                                <div className="font-hand text-xl text-[#B84A67]">฿{Number(totalRow.Cost || 0).toLocaleString()}</div>
+                                <div className="text-xs font-bold text-[#857055]">Total Cost</div>
                               </div>
                               <div>
-                                <div className="text-lg sm:text-xl font-bold">฿{Number(totalRow.Donation || 0).toLocaleString()}</div>
-                                <div className="text-xs opacity-80">Total Donation</div>
+                                <div className="font-hand text-xl text-[#2F7A4D]">฿{Number(totalRow.Donation || 0).toLocaleString()}</div>
+                                <div className="text-xs font-bold text-[#857055]">Total Donation</div>
                               </div>
                               <div>
-                                <div className="text-lg sm:text-xl font-bold">฿{Number(totalFunds?.Cost || 0).toLocaleString()}</div>
-                                <div className="text-xs opacity-80">Total Funds</div>
+                                <div className="font-hand text-xl text-[#3A2E25]">฿{Number(totalFunds?.Cost || 0).toLocaleString()}</div>
+                                <div className="text-xs font-bold text-[#857055]">Total Funds</div>
                               </div>
                             </div>
                           </div>
@@ -1660,44 +1899,44 @@
 
                         {/* Account info */}
                         {(accountBalance || cashbox) && (
-                          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                            <h4 className="font-semibold text-blue-800 text-sm mb-2">Double for Copter Account</h4>
+                          <div className="bg-[#F4FAF1] border-2 border-[#CBE5C0] rounded-[10px] p-3">
+                            <h4 className="font-hand text-base text-[#3A2E25] mb-2">Double for Copter account</h4>
                             <div className="grid grid-cols-2 gap-2 text-sm">
-                              {accountBalance && <div className="flex justify-between"><span className="text-blue-600">Account Balance</span><span className="font-medium">฿{Number(accountBalance.Cost || 0).toLocaleString()}</span></div>}
-                              {cashbox && <div className="flex justify-between"><span className="text-blue-600">Cashbox</span><span className="font-medium">฿{Number(cashbox.Cost || 0).toLocaleString()}</span></div>}
-                              {totalFunds && <div className="flex justify-between col-span-2 border-t pt-1 mt-1"><span className="text-blue-800 font-semibold">Total Funds</span><span className="font-bold text-blue-800">฿{Number(totalFunds.Cost || 0).toLocaleString()}</span></div>}
+                              {accountBalance && <div className="flex justify-between"><span className="text-[#6E5A42] font-semibold">Account Balance</span><span className="font-bold text-[#3A2E25]">฿{Number(accountBalance.Cost || 0).toLocaleString()}</span></div>}
+                              {cashbox && <div className="flex justify-between"><span className="text-[#6E5A42] font-semibold">Cashbox</span><span className="font-bold text-[#3A2E25]">฿{Number(cashbox.Cost || 0).toLocaleString()}</span></div>}
+                              {totalFunds && <div className="flex justify-between col-span-2 border-t-2 border-dotted border-[#CBE5C0] pt-1 mt-1"><span className="font-hand text-base text-[#3A2E25]">Total Funds</span><span className="font-hand text-base text-[#2F7A4D]">฿{Number(totalFunds.Cost || 0).toLocaleString()}</span></div>}
                             </div>
                           </div>
                         )}
 
-                        {/* Date-by-date records */}
-                        <div className="border rounded-xl overflow-hidden">
+                        {/* Date-by-date records — ledger table */}
+                        <div className="border-2 border-[#3A2E25] rounded-[10px] overflow-hidden">
                           <div className="overflow-x-auto">
                             <table className="w-full text-sm">
                               <thead>
-                                <tr className="bg-gray-100 text-left">
-                                  <th className="px-3 py-2 text-xs font-medium text-gray-600">Date</th>
-                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 text-right">Cost</th>
-                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 text-right">Donation</th>
-                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 text-right">Balance</th>
-                                  <th className="px-3 py-2 text-xs font-medium text-gray-600 hidden sm:table-cell">Notes</th>
+                                <tr className="bg-[#F6EFE3] text-left">
+                                  <th className="px-3 py-2 text-xs font-extrabold text-[#6E5A42] uppercase tracking-wide">Date</th>
+                                  <th className="px-3 py-2 text-xs font-extrabold text-[#6E5A42] uppercase tracking-wide text-right">Cost</th>
+                                  <th className="px-3 py-2 text-xs font-extrabold text-[#6E5A42] uppercase tracking-wide text-right">Donation</th>
+                                  <th className="px-3 py-2 text-xs font-extrabold text-[#6E5A42] uppercase tracking-wide text-right">Balance</th>
+                                  <th className="px-3 py-2 text-xs font-extrabold text-[#6E5A42] uppercase tracking-wide hidden sm:table-cell">Notes</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {dateRows.map((row, i) => (
-                                  <tr key={i} className={`border-t ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                                  <tr key={i} className={`border-t-2 border-dotted border-[#E8DCC8] text-[#5C4E3E] ${i % 2 === 0 ? 'bg-white' : 'bg-[#FBF8F0]'}`}>
                                     <td className="px-3 py-2 whitespace-nowrap">{row.Date}</td>
-                                    <td className="px-3 py-2 text-right font-medium">{row.Cost ? `฿${Number(row.Cost).toLocaleString()}` : '-'}</td>
-                                    <td className="px-3 py-2 text-right text-green-600">{row.Donation ? `฿${Number(row.Donation).toLocaleString()}` : '-'}</td>
+                                    <td className="px-3 py-2 text-right font-bold">{row.Cost ? `฿${Number(row.Cost).toLocaleString()}` : '-'}</td>
+                                    <td className="px-3 py-2 text-right font-bold text-[#2F7A4D]">{row.Donation ? `฿${Number(row.Donation).toLocaleString()}` : '-'}</td>
                                     <td className="px-3 py-2 text-right">{row.Balance ? `฿${Number(row.Balance).toLocaleString()}` : '-'}</td>
-                                    <td className="px-3 py-2 text-xs text-gray-500 hidden sm:table-cell">{row.Notes || ''}</td>
+                                    <td className="px-3 py-2 text-xs text-[#857055] hidden sm:table-cell">{row.Notes || ''}</td>
                                   </tr>
                                 ))}
                                 {totalRow && (
-                                  <tr className="border-t-2 border-gray-300 bg-gray-100 font-bold">
+                                  <tr className="border-t-2 border-[#3A2E25] bg-[#F6EFE3] font-extrabold text-[#3A2E25]">
                                     <td className="px-3 py-2">TOTAL</td>
                                     <td className="px-3 py-2 text-right">฿{Number(totalRow.Cost || 0).toLocaleString()}</td>
-                                    <td className="px-3 py-2 text-right text-green-700">฿{Number(totalRow.Donation || 0).toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right text-[#2F7A4D]">฿{Number(totalRow.Donation || 0).toLocaleString()}</td>
                                     <td className="px-3 py-2 text-right" colSpan="2"></td>
                                   </tr>
                                 )}
@@ -1708,17 +1947,17 @@
 
                         {/* Donation breakdown */}
                         {totalRow && (
-                          <div className="bg-green-50 border border-green-200 rounded-xl p-3">
-                            <h4 className="font-semibold text-green-800 text-sm mb-2">Donation Breakdown</h4>
+                          <div className="bg-[#F4FAF1] border-2 border-[#CBE5C0] rounded-[10px] p-3">
+                            <h4 className="font-hand text-base text-[#3A2E25] mb-2">Donation breakdown</h4>
                             <div className="grid grid-cols-2 gap-2 text-sm">
-                              <div className="flex justify-between"><span className="text-green-600">Promptpay</span><span className="font-medium">฿{Number(totalRow.Promptpay || 0).toLocaleString()}</span></div>
-                              <div className="flex justify-between"><span className="text-green-600">Donation Box</span><span className="font-medium">฿{Number(totalRow['Donation Box'] || 0).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span className="text-[#6E5A42] font-semibold">Promptpay</span><span className="font-bold text-[#2F7A4D]">฿{Number(totalRow.Promptpay || 0).toLocaleString()}</span></div>
+                              <div className="flex justify-between"><span className="text-[#6E5A42] font-semibold">Donation Box</span><span className="font-bold text-[#2F7A4D]">฿{Number(totalRow['Donation Box'] || 0).toLocaleString()}</span></div>
                             </div>
                           </div>
                         )}
 
-                        <a href={`${GSHEET_CONFIG.editUrl}?gid=${GSHEET_CONFIG.copterSummaryGid}`} target="_blank" className="block text-center text-sm text-blue-600 hover:underline py-2">
-                          📝 View full sheet in Google Sheets
+                        <a href={`${GSHEET_CONFIG.editUrl}?gid=${GSHEET_CONFIG.copterSummaryGid}`} target="_blank" className="block text-center font-hand text-base text-[#B98A4A] hover:text-[#3A2E25] hover:underline py-2">
+                          📝 view full sheet in Google Sheets
                         </a>
                       </div>
                     );
@@ -1727,78 +1966,58 @@
               )}
             </div>
 
-            {/* Summary */}
-            {activeTab === 'bills' && (
-              <div className="bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-2xl p-4">
-                <div className="grid grid-cols-3 text-center gap-2">
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">{bills.length}</div>
-                    <div className="text-xs opacity-80">Total</div>
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">฿{unpaidTotal.toLocaleString()}</div>
-                    <div className="text-xs opacity-80">Unpaid</div>
-                  </div>
-                  <div>
-                    <div className="text-xl sm:text-2xl font-bold">฿{paidTotal.toLocaleString()}</div>
-                    <div className="text-xs opacity-80">Paid</div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Modals */}
           {showNamePrompt && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-2xl p-5 w-full max-w-sm">
-                <h3 className="font-bold text-lg mb-4">👋 What's your name?</h3>
-                <input placeholder="Enter name" className="w-full p-4 border rounded-xl mb-4 text-base" autoFocus onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) { setUserName(e.target.value.trim()); setShowNamePrompt(false); }}} />
-                <button onClick={e => { const input = e.target.previousElementSibling; if (input.value.trim()) { setUserName(input.value.trim()); setShowNamePrompt(false); }}} className="w-full py-3 bg-blue-600 text-white rounded-xl font-medium">Save</button>
+              <div className={`${UI.card} p-5 w-full max-w-sm`}>
+                <h3 className="font-hand text-2xl text-[#3A2E25] mb-4">👋 What's your name?</h3>
+                <input placeholder="Enter name" className="w-full p-4 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px] mb-4 text-base" autoFocus onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) { setUserName(e.target.value.trim()); setShowNamePrompt(false); }}} />
+                <button onClick={e => { const input = e.target.previousElementSibling; if (input.value.trim()) { setUserName(input.value.trim()); setShowNamePrompt(false); }}} className={`w-full ${UI.btnGreen}`}>✓ save</button>
               </div>
             </div>
           )}
 
           {showScanner && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3">
-              <div className="bg-white rounded-2xl p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <div className={`${UI.card} p-4 w-full max-w-lg max-h-[90vh] overflow-y-auto`}>
                 <div className="flex justify-between items-center mb-4">
-                  <h3 className="font-bold text-lg">📷 Scan Invoice</h3>
-                  <button onClick={() => { setShowScanner(false); setScannedItems([]); setScanPreview(null); }} className="text-2xl p-2">&times;</button>
+                  <h3 className="font-hand text-2xl text-[#3A2E25]">📷 Scan invoice</h3>
+                  <button onClick={() => { setShowScanner(false); setScannedItems([]); setScanPreview(null); }} aria-label="Close scanner" className="text-2xl p-2 text-[#6E5A42] hover:text-[#3A2E25]">&times;</button>
                 </div>
                 {!scanPreview ? (
-                  <label className="block border-2 border-dashed rounded-xl p-8 text-center cursor-pointer">
+                  <label className="block border-2 border-dashed border-[#C9B79E] hover:border-[#3A2E25] rounded-[10px] p-8 text-center cursor-pointer transition-all">
                     <div className="text-4xl mb-4">📄</div>
-                    <span className="inline-block px-6 py-3 bg-blue-600 text-white rounded-xl font-medium">Choose Image</span>
+                    <span className={`inline-block ${UI.btnGreen}`}>🖼️ choose image</span>
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                   </label>
                 ) : isScanning ? (
                   <div className="text-center py-12"><div className="text-5xl pulse mb-4">🔍</div><p>Scanning...</p></div>
                 ) : (
                   <div className="space-y-4">
-                    <img src={scanPreview} className="w-full max-h-48 object-contain rounded-xl border" />
+                    <img src={scanPreview} className="w-full max-h-48 object-contain rounded-[10px] border-2 border-[#C9B79E]" />
                     <div className="flex justify-between items-center">
-                      <span className="text-sm font-medium">{scannedItems.filter(i => i.selected).length} of {scannedItems.length} selected</span>
+                      <span className="text-sm font-bold text-[#6E5A42]">{scannedItems.filter(i => i.selected).length} of {scannedItems.length} selected</span>
                       <div className="flex gap-2">
-                        <button onClick={selectAllItems} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Select All</button>
-                        <button onClick={unselectAllItems} className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Unselect All</button>
+                        <button onClick={selectAllItems} className="px-2 py-1 font-hand text-sm bg-white border-[1.5px] border-[#C9B79E] hover:border-[#3A2E25] text-[#6E5A42] hover:text-[#3A2E25] rounded-lg transition-all">select all</button>
+                        <button onClick={unselectAllItems} className="px-2 py-1 font-hand text-sm bg-white border-[1.5px] border-[#C9B79E] hover:border-[#3A2E25] text-[#6E5A42] hover:text-[#3A2E25] rounded-lg transition-all">unselect all</button>
                       </div>
                     </div>
                     <div className="space-y-2 max-h-48 overflow-y-auto">
                       {scannedItems.map(item => (
-                        <div key={item.id} className={`flex items-center gap-2 p-3 rounded-xl border ${item.selected ? 'bg-green-50 border-green-200' : 'bg-gray-50'}`}>
-                          <button onClick={() => toggleScannedItem(item.id)} className={`w-6 h-6 rounded border-2 flex items-center justify-center flex-shrink-0 ${item.selected ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>{item.selected && '✓'}</button>
-                          <input defaultValue={item.description} onBlur={e => setScannedItems(scannedItems.map(i => i.id === item.id ? {...i, description: e.target.value} : i))} className="flex-1 min-w-0 text-sm bg-transparent border-b border-gray-200 focus:border-blue-500 outline-none py-1" />
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <span className="text-gray-400">฿</span>
-                            <input type="number" defaultValue={item.amount} onBlur={e => setScannedItems(scannedItems.map(i => i.id === item.id ? {...i, amount: parseFloat(e.target.value) || 0} : i))} className="w-20 text-sm text-right bg-transparent border-b border-gray-200 focus:border-blue-500 outline-none py-1" />
+                        <div key={item.id} className={`flex items-center gap-2 p-3 rounded-[10px] border-2 ${item.selected ? 'bg-[#F4FAF1] border-[#CBE5C0]' : 'bg-[#FBF8F0] border-[#D9CBB4]'}`}>
+                          <button onClick={() => toggleScannedItem(item.id)} aria-label={item.selected ? 'Unselect item' : 'Select item'} className={`w-6 h-6 rounded-md border-2 flex items-center justify-center flex-shrink-0 font-black ${item.selected ? 'bg-[#35794C] border-[#35794C] text-white' : 'bg-white border-[#3A2E25]'}`}>{item.selected && '✓'}</button>
+                          <input defaultValue={item.description} onBlur={e => setScannedItems(scannedItems.map(i => i.id === item.id ? {...i, description: e.target.value} : i))} className="flex-1 min-w-0 text-sm bg-transparent border-b-[1.5px] border-dotted border-[#C9B79E] focus:border-[#3A2E25] outline-none py-1" />
+                          <div className="flex items-center gap-1 flex-shrink-0 font-hand text-[#B84A67]">
+                            ฿<input type="number" defaultValue={item.amount} onBlur={e => setScannedItems(scannedItems.map(i => i.id === item.id ? {...i, amount: parseFloat(e.target.value) || 0} : i))} className="w-20 text-right bg-transparent border-b-[1.5px] border-dotted border-[#C9B79E] focus:border-[#3A2E25] outline-none py-1 font-hand text-inherit" />
                           </div>
                         </div>
                       ))}
                     </div>
-                    <div className="flex justify-between items-center pt-3 border-t">
-                      <span className="text-sm text-gray-600">{scannedItems.filter(i => i.selected).length} items · ฿{scannedItems.filter(i => i.selected).reduce((s, i) => s + i.amount, 0).toLocaleString()}</span>
-                      <button onClick={addScannedItems} className="px-5 py-2.5 bg-green-600 text-white rounded-xl font-medium">Add Bills</button>
+                    <div className="flex justify-between items-center pt-3 border-t-2 border-dotted border-[#D9CBB4]">
+                      <span className="text-sm font-bold text-[#6E5A42]">{scannedItems.filter(i => i.selected).length} items · <span className="font-hand text-base text-[#B84A67]">฿{scannedItems.filter(i => i.selected).reduce((s, i) => s + i.amount, 0).toLocaleString()}</span></span>
+                      <button onClick={addScannedItems} className={UI.btnGreen}>+ add bills</button>
                     </div>
                   </div>
                 )}
@@ -1809,48 +2028,48 @@
           {/* Employee Settings Modal */}
           {showEmployeeSettings && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-2xl p-5 w-full max-w-md max-h-[90vh] overflow-y-auto">
-                <h3 className="font-bold text-lg mb-4">Employee Information</h3>
-                <p className="text-gray-600 text-sm mb-4">This info will be used for Cash Advance Forms.</p>
+              <div className={`${UI.card} p-5 w-full max-w-md max-h-[90vh] overflow-y-auto`}>
+                <h3 className="font-hand text-2xl text-[#3A2E25] mb-2">👤 Employee information</h3>
+                <p className="text-[#6E5A42] text-sm font-semibold mb-4">This info will be used for Cash Advance Forms.</p>
                 <div className="space-y-3">
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Name</label>
-                    <input type="text" value={employeeInfo.name} onChange={e => setEmployeeInfo({...employeeInfo, name: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Your name" />
+                    <input type="text" value={employeeInfo.name} onChange={e => setEmployeeInfo({...employeeInfo, name: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="Your name" />
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Position</label>
-                    <input type="text" value={employeeInfo.position} onChange={e => setEmployeeInfo({...employeeInfo, position: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Frontend Developer" />
+                    <input type="text" value={employeeInfo.position} onChange={e => setEmployeeInfo({...employeeInfo, position: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="e.g., Frontend Developer" />
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Team</label>
-                    <input type="text" value={employeeInfo.team} onChange={e => setEmployeeInfo({...employeeInfo, team: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Frontend" />
+                    <input type="text" value={employeeInfo.team} onChange={e => setEmployeeInfo({...employeeInfo, team: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="e.g., Frontend" />
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Department</label>
-                    <input type="text" value={employeeInfo.department} onChange={e => setEmployeeInfo({...employeeInfo, department: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Engineering" />
+                    <input type="text" value={employeeInfo.department} onChange={e => setEmployeeInfo({...employeeInfo, department: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="e.g., Engineering" />
                   </div>
-                  <div className="border-t pt-3 mt-3">
-                    <p className="text-sm font-medium text-gray-700 mb-2">Bank Details (for Transfer)</p>
+                  <div className="border-t-2 border-dotted border-[#D9CBB4] pt-3 mt-3">
+                    <p className="font-hand text-base text-[#6E5A42] mb-2">Bank details (for transfer)</p>
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Bank Name</label>
-                    <input type="text" value={employeeInfo.bankName} onChange={e => setEmployeeInfo({...employeeInfo, bankName: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="e.g., Kasikorn Bank" />
+                    <input type="text" value={employeeInfo.bankName} onChange={e => setEmployeeInfo({...employeeInfo, bankName: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="e.g., Kasikorn Bank" />
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Account Name</label>
-                    <input type="text" value={employeeInfo.accountName} onChange={e => setEmployeeInfo({...employeeInfo, accountName: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Account holder name" />
+                    <input type="text" value={employeeInfo.accountName} onChange={e => setEmployeeInfo({...employeeInfo, accountName: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="Account holder name" />
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Account No</label>
-                    <input type="text" value={employeeInfo.accountNo} onChange={e => setEmployeeInfo({...employeeInfo, accountNo: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Bank account number" />
+                    <input type="text" value={employeeInfo.accountNo} onChange={e => setEmployeeInfo({...employeeInfo, accountNo: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="Bank account number" />
                   </div>
                   <div>
                     <label className="text-sm text-gray-600 block mb-1">Promptpay</label>
-                    <input type="text" value={employeeInfo.promptpay} onChange={e => setEmployeeInfo({...employeeInfo, promptpay: e.target.value})} className="w-full p-3 border rounded-lg" placeholder="Promptpay number" />
+                    <input type="text" value={employeeInfo.promptpay} onChange={e => setEmployeeInfo({...employeeInfo, promptpay: e.target.value})} className="w-full p-3 bg-[#FBF8F0] border-[1.5px] border-[#C9B79E] focus:border-[#3A2E25] outline-none rounded-[10px]" placeholder="Promptpay number" />
                   </div>
                 </div>
                 <div className="flex gap-2 mt-6">
-                  <button onClick={() => setShowEmployeeSettings(false)} className="flex-1 py-3 bg-gray-100 rounded-xl">Cancel</button>
+                  <button onClick={() => setShowEmployeeSettings(false)} className={`flex-1 ${UI.btnWhite}`}>cancel</button>
                   <button onClick={() => {
                     setShowEmployeeSettings(false);
                     if (pendingCashAdvanceItems.length > 0) {
@@ -1858,7 +2077,7 @@
                       setPendingCashAdvanceItems([]);
                       setShowCashAdvancePrompt(false);
                     }
-                  }} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-medium">Save</button>
+                  }} className={`flex-1 ${UI.btnGreen}`}>✓ save</button>
                 </div>
               </div>
             </div>
@@ -1867,40 +2086,40 @@
           {/* Cash Advance Prompt Modal */}
           {showCashAdvancePrompt && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-2xl p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <div className={`${UI.card} p-5 w-full max-w-lg max-h-[90vh] overflow-y-auto`}>
                 <div className="text-center mb-4">
                   <div className="text-4xl mb-2">📄</div>
-                  <h3 className="font-bold text-lg">Generate Cash Advance Form?</h3>
+                  <h3 className="font-hand text-2xl text-[#3A2E25]">Generate cash advance form?</h3>
                 </div>
-                <p className="text-gray-600 text-sm text-center mb-3">Bills added! Select items for Cash Advance Form:</p>
+                <p className="text-[#6E5A42] text-sm font-semibold text-center mb-3">Bills added! Select items for the form:</p>
                 <div className="mb-4">
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-medium">{pendingCashAdvanceItems.filter(i => i.selected !== false).length} of {pendingCashAdvanceItems.length} selected</span>
+                    <span className="text-sm font-bold text-[#6E5A42]">{pendingCashAdvanceItems.filter(i => i.selected !== false).length} of {pendingCashAdvanceItems.length} selected</span>
                     <div className="flex gap-2">
-                      <button onClick={selectAllCashAdvanceItems} className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200">Select All</button>
-                      <button onClick={unselectAllCashAdvanceItems} className="px-2 py-1 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200">Unselect All</button>
+                      <button onClick={selectAllCashAdvanceItems} className="px-2 py-1 font-hand text-sm bg-white border-[1.5px] border-[#C9B79E] hover:border-[#3A2E25] text-[#6E5A42] hover:text-[#3A2E25] rounded-lg transition-all">select all</button>
+                      <button onClick={unselectAllCashAdvanceItems} className="px-2 py-1 font-hand text-sm bg-white border-[1.5px] border-[#C9B79E] hover:border-[#3A2E25] text-[#6E5A42] hover:text-[#3A2E25] rounded-lg transition-all">unselect all</button>
                     </div>
                   </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-2">
+                  <div className="space-y-2 max-h-48 overflow-y-auto border-[1.5px] border-dashed border-[#C9B79E] rounded-[10px] p-2">
                     {pendingCashAdvanceItems.map(item => (
-                      <div key={item.id} className={`flex items-center gap-2 p-2 rounded-lg ${item.selected !== false ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
-                        <button onClick={() => toggleCashAdvanceItem(item.id)} className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${item.selected !== false ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300'}`}>{item.selected !== false && '✓'}</button>
-                        <span className="flex-1 text-sm truncate">{item.description || 'Item'}</span>
-                        <span className="text-sm font-medium">฿{parseFloat(item.amount).toLocaleString()}</span>
+                      <div key={item.id} className={`flex items-center gap-2 p-2 rounded-[10px] border-2 ${item.selected !== false ? 'bg-[#F4FAF1] border-[#CBE5C0]' : 'bg-[#FBF8F0] border-[#D9CBB4]'}`}>
+                        <button onClick={() => toggleCashAdvanceItem(item.id)} aria-label={item.selected !== false ? 'Unselect item' : 'Select item'} className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 font-black text-xs ${item.selected !== false ? 'bg-[#35794C] border-[#35794C] text-white' : 'bg-white border-[#3A2E25]'}`}>{item.selected !== false && '✓'}</button>
+                        <span className="flex-1 text-sm font-bold text-[#3A2E25] truncate">{item.description || 'Item'}</span>
+                        <span className="font-hand text-base text-[#B84A67]">฿{parseFloat(item.amount).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
-                  <div className="text-right mt-2 font-semibold">
-                    Total: ฿{pendingCashAdvanceItems.filter(i => i.selected !== false).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0).toLocaleString()}
+                  <div className="text-right mt-2 font-hand text-lg text-[#3A2E25]">
+                    total <span className="text-[#B84A67]">฿{pendingCashAdvanceItems.filter(i => i.selected !== false).reduce((s, i) => s + (parseFloat(i.amount) || 0), 0).toLocaleString()}</span>
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => handleCashAdvanceResponse(false)} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">No, just bills</button>
-                  <button onClick={() => handleCashAdvanceResponse(true)} disabled={!pendingCashAdvanceItems.some(i => i.selected !== false)} className="flex-1 py-3 bg-green-600 text-white rounded-xl font-medium disabled:opacity-50">
-                    Generate Excel ({pendingCashAdvanceItems.filter(i => i.selected !== false).length})
+                  <button onClick={() => handleCashAdvanceResponse(false)} className={`flex-1 ${UI.btnWhite}`}>no, just bills</button>
+                  <button onClick={() => handleCashAdvanceResponse(true)} disabled={!pendingCashAdvanceItems.some(i => i.selected !== false)} className={`flex-1 ${UI.btnGreen} disabled:opacity-50`}>
+                    📋 generate excel ({pendingCashAdvanceItems.filter(i => i.selected !== false).length})
                   </button>
                 </div>
-                <button onClick={() => setShowEmployeeSettings(true)} className="w-full mt-3 text-sm text-blue-600 hover:underline">Edit employee info</button>
+                <button onClick={() => setShowEmployeeSettings(true)} className="w-full mt-3 font-hand text-base text-[#B98A4A] hover:text-[#3A2E25] hover:underline bg-transparent">✎ edit employee info</button>
               </div>
             </div>
           )}
@@ -1911,7 +2130,8 @@
               <div className="relative max-w-4xl max-h-[90vh]" onClick={e => e.stopPropagation()}>
                 <button
                   onClick={() => setViewingInvoiceImage(null)}
-                  className="absolute -top-3 -right-3 w-10 h-10 bg-white rounded-full shadow-lg flex items-center justify-center text-xl z-10"
+                  aria-label="Close invoice image"
+                  className="absolute -top-3 -right-3 w-10 h-10 bg-white border-2 border-[#3A2E25] rounded-full shadow-[2px_2px_0_rgba(58,46,37,0.25)] flex items-center justify-center text-xl z-10 text-[#3A2E25]"
                 >
                   ×
                 </button>
