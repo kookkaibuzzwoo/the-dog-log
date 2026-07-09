@@ -1,6 +1,7 @@
 # Netlify continuous deployment config for The Dog Log
-# Only index.html is published. The variant HTML files (which contain embedded
-# Firebase/Google credentials) stay in the repo but are NOT served publicly.
+# Only index.html and its referenced assets (mootoo.jpg) are published. The
+# variant HTML files (which contain embedded Firebase/Google credentials) stay
+# in the repo but are NOT served publicly.
 [build]
-  command = "mkdir -p dist && cp index.html dist/index.html"
+  command = "mkdir -p dist && cp index.html dist/index.html && cp mootoo.jpg dist/mootoo.jpg"
   publish = "dist"
