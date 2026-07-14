@@ -65,28 +65,47 @@
 
     const AVAILABLE_ICONS = ['💊', '💉', '🩺', '🏥', '💪', '🩹', '🧴', '🐾', '❤️', '⭐'];
 
-    // Read-only itemized breakdown of Mootoo's hospitalization invoice
-    // (Family Pet Hospital, Chiang Mai — 6 Jul 2026, Receipt/Tax Invoice
-    // FP-RI 01/66-060769). Shown as a collapsible accordion in the Donations
-    // tab; independent of the Vet Cost total.
-    // Subtotal ฿15,093.55 + 7% VAT ฿1,056.56 = ฿16,150.11 grand total.
-    const VET_COST_BREAKDOWN = {
-      title: "Mootoo — Hospitalization",
-      subtitle: "Family Pet Hospital, Chiang Mai · 6 Jul 2026",
-      vatRate: 7,
-      items: [
-        { icon: '💉', label: 'IV fluids & injections', amount: 3654.25 },
-        { icon: '🧪', label: 'Laboratory tests', amount: 3401.82 },
-        { icon: '🛏️', label: 'Hospitalization (8 days)', amount: 1869.20 },
-        { icon: '💊', label: 'Medication', amount: 1322.45 },
-        { icon: '🩺', label: 'Medical procedures', amount: 1308.39 },
-        { icon: '👨‍⚕️', label: 'Doctor fee', amount: 1121.52 },
-        { icon: '🩹', label: 'Medical supplies', amount: 827.11 },
-        { icon: '🔧', label: 'Medical equipment', amount: 785.05 },
-        { icon: '👩‍⚕️', label: 'Nursing care', amount: 598.16 },
-        { icon: '🍖', label: 'Food & supplements', amount: 205.60 },
-      ],
-    };
+    // Read-only itemized breakdowns of Mootoo's vet receipts (Family Pet
+    // Hospital, Chiang Mai). Shown as receipt cards in the Donations tab,
+    // newest first; independent of the Vet Cost total. `vat` is the exact
+    // VAT from the paper receipt (a computed 7% can drift by a satang).
+    const VET_COST_BREAKDOWNS = [
+      // OPD check-up — 14 Jul 2026, Receipt/Tax Invoice FP-RO 01/1113-140769.
+      // Subtotal ฿3,045.29 + VAT ฿213.16 = ฿3,258.45 net.
+      {
+        header: 'Receipt FP-RO 01/1113 · 14 Jul 2026',
+        vatRate: 7,
+        vat: 213.16,
+        items: [
+          { icon: '🧪', label: 'Laboratory tests', amount: 1514.00 },
+          { icon: '💉', label: 'Injection & IV nutrition', amount: 700.95 },
+          { icon: '💊', label: 'Medicine', amount: 523.32 },
+          { icon: '👨‍⚕️', label: 'Doctor fee', amount: 140.19 },
+          { icon: '👩‍⚕️', label: 'Nursing service', amount: 74.77 },
+          { icon: '🏥', label: 'OPD service', amount: 50.00 },
+          { icon: '🩹', label: 'Medical supplies', amount: 42.06 },
+        ],
+      },
+      // Hospitalization — 6 Jul 2026, Receipt/Tax Invoice FP-RI 01/66-060769.
+      // Subtotal ฿15,093.55 + VAT ฿1,056.56 = ฿16,150.11 grand total.
+      {
+        header: 'Receipt FP-RI 01/66 · 6 Jul 2026',
+        vatRate: 7,
+        vat: 1056.56,
+        items: [
+          { icon: '💉', label: 'IV fluids & injections', amount: 3654.25 },
+          { icon: '🧪', label: 'Laboratory tests', amount: 3401.82 },
+          { icon: '🛏️', label: 'Hospitalization (8 days)', amount: 1869.20 },
+          { icon: '💊', label: 'Medication', amount: 1322.45 },
+          { icon: '🩺', label: 'Medical procedures', amount: 1308.39 },
+          { icon: '👨‍⚕️', label: 'Doctor fee', amount: 1121.52 },
+          { icon: '🩹', label: 'Medical supplies', amount: 827.11 },
+          { icon: '🔧', label: 'Medical equipment', amount: 785.05 },
+          { icon: '👩‍⚕️', label: 'Nursing care', amount: 598.16 },
+          { icon: '🍖', label: 'Food & supplements', amount: 205.60 },
+        ],
+      },
+    ];
 
     // Default Google Apps Script Web App URL (public "Anyone" access — syncs without sign-in)
     const DEFAULT_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxaMGxWslhXYVAbTZihKLAGvTpb3ss49i_FSmuU2zBMgRVeqLbB-g8UjXeUZjp5MXKz/exec';
@@ -1757,7 +1776,7 @@
                     </div>
                     {vetCosts.length === 0 && <p className="text-center py-4 font-hand text-lg text-[#B5A488]">No vet costs logged yet.</p>}
                     <div className="divide-y-2 divide-dotted divide-[#D9CBB4]">
-                      {vetCosts.map(v => (
+                      {[...vetCosts].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.id - a.id).map(v => (
                         <div key={v.id} className="flex items-center gap-2.5 py-[9px] px-0.5">
                           <span className="text-[17px] flex-none">🏥</span>
                           <div className="flex-1 min-w-0">
@@ -1789,19 +1808,18 @@
                       ))}
                     </div>
 
-                    {/* Receipt-style read-only breakdown */}
-                    {(() => {
-                      const b = VET_COST_BREAKDOWN;
+                    {/* Receipt-style read-only breakdowns (newest first) */}
+                    {VET_COST_BREAKDOWNS.map((b, ri) => {
                       const sub = b.items.reduce((s, i) => s + i.amount, 0);
-                      const vat = sub * b.vatRate / 100;
+                      const vat = b.vat != null ? b.vat : sub * b.vatRate / 100;
                       const total = sub + vat;
                       const m = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                       const shown = b.items.slice(0, 5);
                       const rest = b.items.slice(5);
                       const restSum = rest.reduce((s, i) => s + i.amount, 0);
                       return (
-                        <div className="bg-[#FBF8F0] border-[1.5px] border-dashed border-[#C9B79E] rounded p-4 mt-1 font-mono">
-                          <div className="text-center text-xs font-bold text-[#6E5A42] tracking-[.14em] uppercase border-b-[1.5px] border-dashed border-[#C9B79E] pb-2 mb-2">— Receipt FP-RI 01/66 —</div>
+                        <div key={ri} className="bg-[#FBF8F0] border-[1.5px] border-dashed border-[#C9B79E] rounded p-4 mt-1 font-mono">
+                          <div className="text-center text-xs font-bold text-[#6E5A42] tracking-[.14em] uppercase border-b-[1.5px] border-dashed border-[#C9B79E] pb-2 mb-2">— {b.header} —</div>
                           {shown.map((it, idx) => (
                             <div key={idx} className="flex justify-between gap-2 text-xs text-[#5C4E3E] py-[2.5px]"><span className="uppercase">{it.label}</span><span>{m(it.amount)}</span></div>
                           ))}
@@ -1813,10 +1831,12 @@
                             <div className="flex justify-between text-xs text-[#6E5A42] py-0.5"><span>VAT {b.vatRate}%</span><span>{m(vat)}</span></div>
                             <div className="flex justify-between text-sm font-extrabold text-[#3A2E25] py-[3px]"><span>TOTAL</span><span>฿{m(total)}</span></div>
                           </div>
-                          <div className="text-center text-[11px] text-[#B5A488] pt-1.5">*** THANK YOU · GET WELL MOOTOO ***</div>
+                          {ri === VET_COST_BREAKDOWNS.length - 1 && (
+                            <div className="text-center text-[11px] text-[#B5A488] pt-1.5">*** THANK YOU · GET WELL MOOTOO ***</div>
+                          )}
                         </div>
                       );
-                    })()}
+                    })}
                   </div>
                 </div>
                 </React.Fragment>
