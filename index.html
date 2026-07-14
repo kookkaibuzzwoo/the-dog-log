@@ -1673,8 +1673,12 @@
                                 <span className="font-hand text-sm text-[#B98A4A] whitespace-nowrap">— {formatDate(latest.date)}, by {latest.author || '?'}</span>
                                 <button onClick={() => removeUpdate(latest.id)} aria-label="Remove this update" title="Remove update" className="text-[#B5A488] hover:text-[#B84A67] text-xs px-1" style={{ minHeight: '24px' }}>✕</button>
                               </div>
-                              <input value={latest.note} placeholder="add a detail — how is she doing?" onChange={e => updateUpdate(latest.id, 'note', e.target.value)}
-                                className="w-full bg-transparent outline-none text-[12.5px] text-[#6E5A42] font-semibold leading-relaxed" />
+                              {/* Auto-growing note: hidden replica div sets the height so long text wraps instead of getting cut */}
+                              <div className="grid w-full">
+                                <textarea value={latest.note} placeholder="add a detail — how is she doing?" rows={1} onChange={e => updateUpdate(latest.id, 'note', e.target.value)}
+                                  className="w-full bg-transparent outline-none text-[12.5px] text-[#6E5A42] font-semibold leading-relaxed resize-none overflow-hidden" style={{ gridArea: '1 / 1' }} />
+                                <div aria-hidden="true" className="invisible whitespace-pre-wrap break-words text-[12.5px] font-semibold leading-relaxed" style={{ gridArea: '1 / 1' }}>{(latest.note || '') + ' '}</div>
+                              </div>
                             </div>
                           </div>
                         ) : (
