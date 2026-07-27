@@ -70,6 +70,21 @@
     // newest first; independent of the Vet Cost total. `vat` is the exact
     // VAT from the paper receipt (a computed 7% can drift by a satang).
     const VET_COST_BREAKDOWNS = [
+      // OPD follow-up — 24 Jul 2026, Receipt/Tax Invoice FP-RO 01/1298-240769.
+      // Subtotal ฿2,409.74 + VAT ฿168.67 = ฿2,578.41 net.
+      {
+        header: 'Receipt FP-RO 01/1298 · 24 Jul 2026',
+        vatRate: 7,
+        vat: 168.67,
+        items: [
+          { icon: '🧪', label: 'Laboratory tests', amount: 1056.08 },
+          { icon: '💊', label: 'Medicine', amount: 1046.64 },
+          { icon: '👨‍⚕️', label: 'Doctor fee', amount: 140.19 },
+          { icon: '👩‍⚕️', label: 'Nursing service', amount: 74.77 },
+          { icon: '🏥', label: 'OPD service', amount: 50.00 },
+          { icon: '🩹', label: 'Medical supplies', amount: 42.06 },
+        ],
+      },
       // OPD check-up — 14 Jul 2026, Receipt/Tax Invoice FP-RO 01/1113-140769.
       // Subtotal ฿3,045.29 + VAT ฿213.16 = ฿3,258.45 net.
       {
@@ -1814,8 +1829,9 @@
                       const vat = b.vat != null ? b.vat : sub * b.vatRate / 100;
                       const total = sub + vat;
                       const m = n => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                      const shown = b.items.slice(0, 5);
-                      const rest = b.items.slice(5);
+                      const collapse = b.items.length > 6;
+                      const shown = collapse ? b.items.slice(0, 5) : b.items;
+                      const rest = collapse ? b.items.slice(5) : [];
                       const restSum = rest.reduce((s, i) => s + i.amount, 0);
                       return (
                         <div key={ri} className="bg-[#FBF8F0] border-[1.5px] border-dashed border-[#C9B79E] rounded p-4 mt-1 font-mono">
