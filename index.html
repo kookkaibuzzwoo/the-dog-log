@@ -70,6 +70,19 @@
     // newest first; independent of the Vet Cost total. `vat` is the exact
     // VAT from the paper receipt (a computed 7% can drift by a satang).
     const VET_COST_BREAKDOWNS = [
+      // OPD check-up — 24 Sep 2026, Receipt/Tax Invoice FP-RO 01/2342-240969.
+      // Subtotal ฿826.40 + VAT ฿57.85 = ฿884.25 net.
+      {
+        header: 'Receipt FP-RO 01/2342 · 24 Sep 2026',
+        vatRate: 7,
+        vat: 57.85,
+        items: [
+          { icon: '🧪', label: 'Laboratory tests', amount: 551.40 },
+          { icon: '👨‍⚕️', label: 'Doctor fee', amount: 150.00 },
+          { icon: '👩‍⚕️', label: 'Nursing service', amount: 80.00 },
+          { icon: '🩹', label: 'Medical supplies', amount: 45.00 },
+        ],
+      },
       // OPD follow-up — 24 Jul 2026, Receipt/Tax Invoice FP-RO 01/1298-240769.
       // Subtotal ฿2,409.74 + VAT ฿168.67 = ฿2,578.41 net.
       {
